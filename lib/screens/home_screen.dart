@@ -27,7 +27,7 @@ class HomeScreen extends StatelessWidget {
               AppColors.neonLime,
             ],
           ).createShader(rect),
-          child: const Text('BoringSudoku'),
+          child: const Text('Sudoku - Neon Theme'),
         ),
       ),
       body: Padding(

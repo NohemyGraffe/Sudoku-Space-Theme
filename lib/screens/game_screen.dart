@@ -17,6 +17,9 @@ class _GameScreenState extends State<GameScreen> {
   int? selectedRow;
   int? selectedCol;
 
+  // NEW: notes mode switch
+  bool notesMode = false;
+
   @override
   void initState() {
     super.initState();
@@ -31,16 +34,47 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   void _onCellTap(int r, int c) {
-    if (model.isFixed(r, c)) return;
     setState(() {
       selectedRow = r;
       selectedCol = c;
     });
   }
 
-  void _onInput(int? value) {
+  void _onInput(int? valueOrNumber) {
     if (selectedRow == null || selectedCol == null) return;
-    model.setCell(selectedRow!, selectedCol!, value);
+    final r = selectedRow!, c = selectedCol!;
+
+    if (notesMode) {
+      debugPrint(
+        'NOTES path: r=$r c=$c v=$valueOrNumber fixed=${model.isFixed(r, c)}',
+      );
+      if (valueOrNumber == null) return;
+      if (model.isFixed(r, c)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Select an empty cell to add notes.')),
+        );
+        return;
+      }
+      model.toggleNote(r, c, valueOrNumber);
+      debugPrint(
+        'After toggle: notes=${model.notesAt(r, c)} board=${model.board[r][c]}',
+      );
+      setState(() {});
+      return;
+    }
+
+    model.setCell(r, c, valueOrNumber);
+    setState(() {});
+  }
+
+  void _erase() {
+    if (selectedRow == null || selectedCol == null) return;
+    final r = selectedRow!, c = selectedCol!;
+    if (notesMode) {
+      model.clearNotes(r, c);
+    } else {
+      model.setCell(r, c, null);
+    }
     setState(() {});
   }
 
@@ -62,9 +96,7 @@ class _GameScreenState extends State<GameScreen> {
               AppColors.neonLime,
             ],
           ).createShader(rect),
-          child: Text(
-            '${difficultyLabel(model.currentDifficulty)} • BoringSudoku',
-          ),
+          child: Text('${difficultyLabel(model.currentDifficulty)} • Sudoku'),
         ),
         actions: [
           IconButton(
@@ -111,7 +143,36 @@ class _GameScreenState extends State<GameScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
+
+            // NEW: Notes toggle
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18.0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      icon: Icon(notesMode ? Icons.edit_note : Icons.notes),
+                      label: Text(notesMode ? 'Notes: ON' : 'Notes: OFF'),
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(
+                          color: notesMode
+                              ? AppColors.neonCyan
+                              : AppColors.neonViolet.withOpacity(0.5),
+                          width: 1.6,
+                        ),
+                        foregroundColor: notesMode
+                            ? AppColors.neonCyan
+                            : AppColors.muted,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      onPressed: () => setState(() => notesMode = !notesMode),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
 
             // Number pad
             Padding(
@@ -136,8 +197,8 @@ class _GameScreenState extends State<GameScreen> {
                   Expanded(
                     child: ElevatedButton.icon(
                       icon: const Icon(Icons.delete_outline),
-                      label: const Text('Erase'),
-                      onPressed: () => _onInput(null),
+                      label: Text(notesMode ? 'Clear Notes' : 'Erase'),
+                      onPressed: _erase,
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -220,6 +281,9 @@ class _GameScreenState extends State<GameScreen> {
         final selected = (selectedRow == r && selectedCol == c);
         final fixed = model.isFixed(r, c);
         final conflict = model.isConflict(r, c);
+        final value = model.board[r][c];
+        final isEmpty = (value == 0);
+        final hasNotes = model.notesAt(r, c).isNotEmpty; // don’t tie to isEmpty
 
         final thickTop = r % 3 == 0;
         final thickLeft = c % 3 == 0;
@@ -227,57 +291,113 @@ class _GameScreenState extends State<GameScreen> {
         Color cellBg = Colors.transparent;
         if (selected) cellBg = AppColors.neonCyan.withOpacity(0.12);
 
-        return Container(
-          decoration: BoxDecoration(
-            color: cellBg,
-            border: Border(
-              top: BorderSide(
-                color: thickTop
-                    ? AppColors.neonPink.withOpacity(0.8)
-                    : AppColors.neonViolet.withOpacity(0.35),
-                width: thickTop ? 2 : 1,
-              ),
-              left: BorderSide(
-                color: thickLeft
-                    ? AppColors.neonPink.withOpacity(0.8)
-                    : AppColors.neonViolet.withOpacity(0.35),
-                width: thickLeft ? 2 : 1,
-              ),
-              right: const BorderSide(color: Colors.transparent, width: 0),
-              bottom: const BorderSide(color: Colors.transparent, width: 0),
-            ),
-          ),
-          child: InkWell(
-            onTap: () => _onCellTap(r, c),
-            borderRadius: BorderRadius.circular(6),
-            child: Center(
-              child: Text(
-                model.board[r][c] == 0 ? '' : model.board[r][c].toString(),
-                style: TextStyle(
-                  fontWeight: fixed ? FontWeight.w800 : FontWeight.w600,
-                  fontSize: 18,
-                  letterSpacing: 0.5,
-                  color: conflict
-                      ? Colors.redAccent
-                      : (fixed ? Colors.white : AppColors.neonLime),
-                  shadows: [
-                    Shadow(
-                      color:
-                          (conflict
-                                  ? Colors.redAccent
-                                  : (fixed
-                                        ? AppColors.neonPink
-                                        : AppColors.neonLime))
-                              .withOpacity(0.35),
-                      blurRadius: 8,
-                    ),
-                  ],
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque, // makes the whole cell clickable
+          onTap: () => _onCellTap(r, c), // calls your tap handler
+          child: Container(
+            decoration: BoxDecoration(
+              color: cellBg,
+              border: Border(
+                top: BorderSide(
+                  color: thickTop
+                      ? AppColors.neonPink.withOpacity(0.8)
+                      : AppColors.neonViolet.withOpacity(0.35),
+                  width: thickTop ? 2 : 1,
                 ),
+                left: BorderSide(
+                  color: thickLeft
+                      ? AppColors.neonPink.withOpacity(0.8)
+                      : AppColors.neonViolet.withOpacity(0.35),
+                  width: thickLeft ? 2 : 1,
+                ),
+                right: const BorderSide(color: Colors.transparent, width: 0),
+                bottom: const BorderSide(color: Colors.transparent, width: 0),
               ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(3),
+              child: hasNotes
+                  ? _NotesGrid(notes: model.notesAt(r, c)) // no FittedBox here
+                  : FittedBox(
+                      // FittedBox only for big digits
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        isEmpty ? '' : value.toString(),
+                        style: TextStyle(
+                          fontWeight: fixed ? FontWeight.w800 : FontWeight.w600,
+                          fontSize: 18,
+                          letterSpacing: 0.5,
+                          color: conflict
+                              ? Colors.redAccent
+                              : (fixed ? Colors.white : AppColors.neonLime),
+                          shadows: [
+                            Shadow(
+                              color:
+                                  (conflict
+                                          ? Colors.redAccent
+                                          : (fixed
+                                                ? AppColors.neonPink
+                                                : AppColors.neonLime))
+                                      .withOpacity(0.35),
+                              blurRadius: 8,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
             ),
           ),
         );
       },
+    );
+  }
+}
+
+// Renders tiny 1..9 candidates in a 3x3 grid (properly spaced horizontally)
+class _NotesGrid extends StatelessWidget {
+  final Set<int> notes;
+  const _NotesGrid({required this.notes});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(0.2),
+      child: Table(
+        defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+        columnWidths: const {
+          0: FlexColumnWidth(),
+          1: FlexColumnWidth(),
+          2: FlexColumnWidth(),
+        },
+        children: List.generate(3, (r) {
+          return TableRow(
+            children: List.generate(3, (c) {
+              final n = r * 3 + c + 1;
+              final present = notes.contains(n);
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 0.2),
+                  child: Text(
+                    present ? '$n' : '',
+                    strutStyle: const StrutStyle(
+                      forceStrutHeight: true,
+                      height: 1,
+                      fontSize: 7.2,
+                    ),
+                    style: TextStyle(
+                      fontSize: 7.2,
+                      fontWeight: FontWeight.w700,
+                      color: present
+                          ? AppColors.neonCyan.withOpacity(0.9)
+                          : Colors.transparent,
+                    ),
+                  ),
+                ),
+              );
+            }),
+          );
+        }),
+      ),
     );
   }
 }
