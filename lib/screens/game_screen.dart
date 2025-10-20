@@ -278,40 +278,63 @@ class _GameScreenState extends State<GameScreen> {
       itemBuilder: (context, index) {
         final r = index ~/ 9;
         final c = index % 9;
+
         final selected = (selectedRow == r && selectedCol == c);
         final fixed = model.isFixed(r, c);
         final conflict = model.isConflict(r, c);
         final value = model.board[r][c];
         final isEmpty = (value == 0);
-        final hasNotes = model.notesAt(r, c).isNotEmpty; // don’t tie to isEmpty
+        final hasNotes = model.notesAt(r, c).isNotEmpty; // don't tie to isEmpty
 
+        // Block-edge logic
         final thickTop = r % 3 == 0;
         final thickLeft = c % 3 == 0;
+
+        // Close the outer frame on the last row/col
+        final isLastRow = r == 8;
+        final isLastCol = c == 8;
+        final thickBottom = isLastRow; // outer frame should be thick
+        final thickRight = isLastCol; // outer frame should be thick
+
+        Color frameColor(bool thick) => thick
+            ? AppColors.neonPink.withOpacity(0.8)
+            : AppColors.neonViolet.withOpacity(0.35);
+
+        final top = BorderSide(
+          color: frameColor(thickTop),
+          width: thickTop ? 2 : 1,
+        );
+        final left = BorderSide(
+          color: frameColor(thickLeft),
+          width: thickLeft ? 2 : 1,
+        );
+        final right = isLastCol
+            ? BorderSide(
+                color: frameColor(thickRight),
+                width: thickRight ? 2 : 1,
+              )
+            : const BorderSide(color: Colors.transparent, width: 0);
+        final bottom = isLastRow
+            ? BorderSide(
+                color: frameColor(thickBottom),
+                width: thickBottom ? 2 : 1,
+              )
+            : const BorderSide(color: Colors.transparent, width: 0);
 
         Color cellBg = Colors.transparent;
         if (selected) cellBg = AppColors.neonCyan.withOpacity(0.12);
 
         return GestureDetector(
-          behavior: HitTestBehavior.opaque, // makes the whole cell clickable
-          onTap: () => _onCellTap(r, c), // calls your tap handler
+          behavior: HitTestBehavior.opaque,
+          onTap: () => _onCellTap(r, c),
           child: Container(
             decoration: BoxDecoration(
               color: cellBg,
               border: Border(
-                top: BorderSide(
-                  color: thickTop
-                      ? AppColors.neonPink.withOpacity(0.8)
-                      : AppColors.neonViolet.withOpacity(0.35),
-                  width: thickTop ? 2 : 1,
-                ),
-                left: BorderSide(
-                  color: thickLeft
-                      ? AppColors.neonPink.withOpacity(0.8)
-                      : AppColors.neonViolet.withOpacity(0.35),
-                  width: thickLeft ? 2 : 1,
-                ),
-                right: const BorderSide(color: Colors.transparent, width: 0),
-                bottom: const BorderSide(color: Colors.transparent, width: 0),
+                top: top,
+                left: left,
+                right: right,
+                bottom: bottom,
               ),
             ),
             child: Padding(
@@ -319,8 +342,7 @@ class _GameScreenState extends State<GameScreen> {
               child: hasNotes
                   ? _NotesGrid(notes: model.notesAt(r, c)) // no FittedBox here
                   : FittedBox(
-                      // FittedBox only for big digits
-                      fit: BoxFit.scaleDown,
+                      fit: BoxFit.scaleDown, // only for big digits
                       child: Text(
                         isEmpty ? '' : value.toString(),
                         style: TextStyle(
@@ -361,7 +383,7 @@ class _NotesGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.all(0.2),
+      padding: const EdgeInsets.all(0.2), // tighter to cell edges
       child: Table(
         defaultVerticalAlignment: TableCellVerticalAlignment.middle,
         columnWidths: const {
