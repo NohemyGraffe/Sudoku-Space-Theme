@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'theme/app_theme.dart';
-import 'screens/game_screen.dart';
+import 'screens/home_screen.dart';
 
 void main() => runApp(const BoringSudokuApp());
 
@@ -10,10 +10,10 @@ class BoringSudokuApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Sudoku - Space Theme',
+      title: 'BoringSudoku',
       debugShowCheckedModeBanner: false,
       theme: neonTheme,
-      home: const GameScreen(),
+      home: const HomeScreen(),
     );
   }
 }

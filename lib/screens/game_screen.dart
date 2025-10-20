@@ -1,22 +1,30 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/sudoku_board.dart';
+import '../models/difficulty.dart';
 import '../widgets/num_key.dart';
 
 class GameScreen extends StatefulWidget {
-  const GameScreen({super.key});
+  final Difficulty startDifficulty;
+  const GameScreen({super.key, this.startDifficulty = Difficulty.easy});
 
   @override
   State<GameScreen> createState() => _GameScreenState();
 }
 
 class _GameScreenState extends State<GameScreen> {
-  final SudokuModel model = SudokuModel();
+  late SudokuModel model;
   int? selectedRow;
   int? selectedCol;
 
+  @override
+  void initState() {
+    super.initState();
+    model = SudokuModel()..loadRandom(widget.startDifficulty);
+  }
+
   void _newGame() {
-    model.load(model.currentPuzzleIndex + 1);
+    model.loadRandom(model.currentDifficulty);
     selectedRow = null;
     selectedCol = null;
     setState(() {});
@@ -54,7 +62,9 @@ class _GameScreenState extends State<GameScreen> {
               AppColors.neonLime,
             ],
           ).createShader(rect),
-          child: const Text('BoringSudoku'),
+          child: Text(
+            '${difficultyLabel(model.currentDifficulty)} • BoringSudoku',
+          ),
         ),
         actions: [
           IconButton(
@@ -207,12 +217,10 @@ class _GameScreenState extends State<GameScreen> {
       itemBuilder: (context, index) {
         final r = index ~/ 9;
         final c = index % 9;
-
         final selected = (selectedRow == r && selectedCol == c);
         final fixed = model.isFixed(r, c);
         final conflict = model.isConflict(r, c);
 
-        // Neon borders every 3rd line
         final thickTop = r % 3 == 0;
         final thickLeft = c % 3 == 0;
 
