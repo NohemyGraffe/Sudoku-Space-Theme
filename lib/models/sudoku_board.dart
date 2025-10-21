@@ -3,18 +3,22 @@ import '../data/puzzles.dart';
 import 'difficulty.dart';
 
 class SudokuModel {
-  late List<List<int>> initial;
-  late List<List<int>> board;
+  late List<List<int>> initial; // 9x9, 0 = empty
+  late List<List<int>> board; // 9x9, 0 = empty
 
-  // NEW: per-cell notes (candidates 1..9)
-  late List<List<Set<int>>> notes;
+  /// Per-cell notes (candidates 1..9)
+  late List<List<Set<int>>> notes; // 9x9 of sets
 
   Difficulty currentDifficulty = Difficulty.easy;
   final _rand = Random();
 
+  /// Default constructor starts a random puzzle (kept as-is for your flows)
   SudokuModel() {
     loadRandom(Difficulty.easy);
   }
+
+  /// Private constructor used by fromMap to avoid calling loadRandom().
+  SudokuModel._internal();
 
   void loadRandom(Difficulty difficulty) {
     currentDifficulty = difficulty;
@@ -27,7 +31,7 @@ class SudokuModel {
 
   bool isFixed(int r, int c) => initial[r][c] != 0;
 
-  // Set a definitive value (not a note)
+  /// Set a definitive value (not a note)
   void setCell(int r, int c, int? value) {
     if (isFixed(r, c)) return;
     board[r][c] = value ?? 0;
@@ -127,4 +131,88 @@ class SudokuModel {
       }
     }
   }
+
+  // ============================================================
+  //                P E R S I S T E N C E   A P I
+  // ============================================================
+
+  /// Serialize full game state to a Map (JSON-safe).
+  Map<String, dynamic> toMap() => {
+    'difficulty': currentDifficulty.name,
+    'initial': initial, // List<List<int>>
+    'board': board, // List<List<int>>
+    // notes as lists so JSON can encode them
+    'notes': notes
+        .map(
+          (row) => row.map((s) {
+            final list = s.toList()..sort();
+            return list;
+          }).toList(),
+        )
+        .toList(),
+  };
+
+  /// Rebuild a SudokuModel from a previously saved Map.
+  /// Safe-guards ensure 9x9 shapes; missing notes are initialized empty.
+  factory SudokuModel.fromMap(Map<String, dynamic> m) {
+    final model = SudokuModel._internal();
+
+    // Difficulty
+    final diffName = (m['difficulty'] as String?) ?? Difficulty.easy.name;
+    model.currentDifficulty = Difficulty.values.firstWhere(
+      (d) => d.name == diffName,
+      orElse: () => Difficulty.easy,
+    );
+
+    // Initial & Board
+    model.initial = _read9x9IntGrid(m['initial']) ?? _emptyIntGrid();
+    model.board = _read9x9IntGrid(m['board']) ?? _cloneIntGrid(model.initial);
+
+    // Notes
+    final parsedNotes = _read9x9Notes(m['notes']);
+    model.notes = parsedNotes ?? _emptyNotesGrid();
+
+    return model;
+  }
+
+  // ---------- Static helpers for fromMap ----------
+
+  static List<List<int>>? _read9x9IntGrid(dynamic src) {
+    if (src is! List || src.length != 9) return null;
+    final out = <List<int>>[];
+    for (final row in src) {
+      if (row is! List || row.length != 9) return null;
+      out.add(List<int>.from(row.map((e) => (e as num).toInt())));
+    }
+    return out;
+  }
+
+  static List<List<Set<int>>>? _read9x9Notes(dynamic src) {
+    if (src == null) return null;
+    if (src is! List || src.length != 9) return null;
+    final out = <List<Set<int>>>[];
+    for (final row in src) {
+      if (row is! List || row.length != 9) return null;
+      final listRow = <Set<int>>[];
+      for (final cell in row) {
+        if (cell is List) {
+          listRow.add(Set<int>.from(cell.map((e) => (e as num).toInt())));
+        } else {
+          // If malformed, fallback to empty set
+          listRow.add(<int>{});
+        }
+      }
+      out.add(listRow);
+    }
+    return out;
+  }
+
+  static List<List<int>> _emptyIntGrid() =>
+      List.generate(9, (_) => List.filled(9, 0));
+
+  static List<List<int>> _cloneIntGrid(List<List<int>> grid) =>
+      grid.map((r) => List<int>.from(r)).toList();
+
+  static List<List<Set<int>>> _emptyNotesGrid() =>
+      List.generate(9, (_) => List.generate(9, (_) => <int>{}));
 }
