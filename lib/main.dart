@@ -2,18 +2,21 @@ import 'package:flutter/material.dart';
 import 'theme/app_theme.dart';
 import 'screens/home_screen.dart';
 
-void main() => runApp(const BoringSudokuApp());
+void main() => runApp(const SudokuApp());
 
-class BoringSudokuApp extends StatelessWidget {
-  const BoringSudokuApp({super.key});
+class SudokuApp extends StatelessWidget {
+  const SudokuApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'BoringSudoku',
+      title: 'Sudoku',
       debugShowCheckedModeBanner: false,
       theme: neonTheme,
       home: const HomeScreen(),
     );
   }
 }
+
+
+//flutter run -d RFCT329XGDZ
