@@ -3,6 +3,7 @@ import '../theme/app_theme.dart';
 import '../models/sudoku_board.dart';
 import '../models/difficulty.dart';
 import '../widgets/num_key.dart';
+import 'dart:async'; // <-- add this for Timer
 
 class GameScreen extends StatefulWidget {
   final Difficulty startDifficulty;
@@ -17,6 +18,11 @@ class _GameScreenState extends State<GameScreen> {
   int? selectedRow;
   int? selectedCol;
 
+  Timer? _ticker; // runs once per second
+  int elapsed = 0; // seconds
+  int mistakes = 0; // counts wrong placements
+  bool _paused = false; // pause/resume flag
+
   // NEW: notes mode switch
   bool notesMode = false;
 
@@ -24,12 +30,26 @@ class _GameScreenState extends State<GameScreen> {
   void initState() {
     super.initState();
     model = SudokuModel()..loadRandom(widget.startDifficulty);
+    _startTimer(); // <-- start ticking once model exists
+
+    // Check for win after every setState
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkWin());
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel(); // <-- stop the timer
+    super.dispose();
   }
 
   void _newGame() {
     model.loadRandom(model.currentDifficulty);
     selectedRow = null;
     selectedCol = null;
+    elapsed = 0; // <-- reset
+    _paused = false; // <-- ensure running
+    mistakes = 0; // reset mistakes on new game
+    _startTimer(); // <-- restart
     setState(() {});
   }
 
@@ -64,6 +84,53 @@ class _GameScreenState extends State<GameScreen> {
     }
 
     model.setCell(r, c, valueOrNumber);
+    // If this was a definitive placement (not a note) check for a conflict
+    if (valueOrNumber != null) {
+      final conflict = model.isConflict(r, c);
+      if (conflict) {
+        mistakes++;
+        if (mistakes >= 3) {
+          _paused = true; // pause timer
+          // Use a microtask to ensure UI has updated before showing dialog
+          Future.microtask(() {
+            showDialog<bool>(
+              context: context,
+              barrierDismissible: false,
+              builder: (ctx) => AlertDialog(
+                backgroundColor: AppColors.card,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                title: const Text('Game over'),
+                content: const Text(
+                  'You made three mistakes. Do you want to start a new game?',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(ctx); // close dialog
+                      _newGame();
+                    },
+                    child: const Text('New Game'),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(ctx); // close dialog
+                      Navigator.pop(context); // return to home
+                    },
+                    child: const Text('Close'),
+                  ),
+                ],
+              ),
+            );
+          });
+        }
+      }
+    }
+
+    // After any move, check if we won
+    Future.microtask(() => _checkWin());
+
     setState(() {});
   }
 
@@ -78,12 +145,120 @@ class _GameScreenState extends State<GameScreen> {
     setState(() {});
   }
 
+  void _startTimer() {
+    _ticker?.cancel();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!_paused) {
+        setState(() => elapsed++);
+      }
+    });
+  }
+
+  void _pauseTimer() => setState(() => _paused = true);
+  void _resumeTimer() => setState(() => _paused = false);
+
+  void _checkWin() {
+    if (model.isComplete && !_paused) {
+      _paused = true; // pause timer when won
+      showGeneralDialog(
+        context: context,
+        barrierDismissible: false,
+        transitionDuration: const Duration(milliseconds: 500),
+        pageBuilder: (context, anim1, anim2) {
+          return Dialog(
+            backgroundColor: Colors.transparent,
+            child: Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: AppColors.card,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.neonLime.withOpacity(0.3),
+                    blurRadius: 24,
+                    spreadRadius: 4,
+                  ),
+                ],
+                border: Border.all(
+                  color: AppColors.neonLime.withOpacity(0.5),
+                  width: 2,
+                ),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Animated celebration text
+                  TweenAnimationBuilder<double>(
+                    duration: const Duration(milliseconds: 800),
+                    tween: Tween(begin: 0.0, end: 1.0),
+                    builder: (context, value, child) {
+                      return Transform.scale(
+                        scale: 0.8 + (value * 0.4),
+                        child: Opacity(
+                          opacity: value,
+                          child: const Text(
+                            '🎉 Congratulations! 🎉\nPuzzle Completed!',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.neonLime,
+                              height: 1.3,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 24),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      TextButton(
+                        onPressed: () {
+                          Navigator.pop(context); // close dialog
+                          _newGame();
+                        },
+                        child: const Text(
+                          'New Game',
+                          style: TextStyle(
+                            color: AppColors.neonCyan,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          Navigator.pop(context); // close dialog
+                          Navigator.pop(context); // return to home
+                        },
+                        child: const Text(
+                          'Close',
+                          style: TextStyle(
+                            color: AppColors.neonPink,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+    }
+  }
+
+  String _mmss(int s) {
+    final m = s ~/ 60;
+    final ss = (s % 60).toString().padLeft(2, '0');
+    return '$m:$ss';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final titleStyle = Theme.of(
-      context,
-    ).textTheme.titleLarge!.copyWith(color: AppColors.text, fontSize: 24);
-
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.transparent,
@@ -99,6 +274,49 @@ class _GameScreenState extends State<GameScreen> {
           child: Text('${difficultyLabel(model.currentDifficulty)} • Sudoku'),
         ),
         actions: [
+          // MISTAKES UI (decorated to prevent blending / clipping)
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppColors.card.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.neonPink.withOpacity(0.22)),
+              ),
+              child: Text(
+                'Mistakes: $mistakes/3',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.neonPink,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ),
+
+          // TIMER UI
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: Text(
+                _mmss(elapsed),
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.text,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: _paused ? 'Resume' : 'Pause',
+            icon: Icon(
+              _paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+            ),
+            onPressed: () => _paused ? _resumeTimer() : _pauseTimer(),
+          ),
+
           IconButton(
             tooltip: 'New Game',
             onPressed: _newGame,
@@ -109,11 +327,6 @@ class _GameScreenState extends State<GameScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            const SizedBox(height: 8),
-            Text(
-              'Neon Mode • Have fun ✨',
-              style: titleStyle.copyWith(fontSize: 14, color: AppColors.muted),
-            ),
             const SizedBox(height: 12),
 
             // Board
@@ -201,31 +414,6 @@ class _GameScreenState extends State<GameScreen> {
                       onPressed: _erase,
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      icon: const Icon(Icons.check_circle_outline),
-                      label: const Text('Check'),
-                      onPressed: () {
-                        final ok = !model.hasAnyConflicts() && !model.hasZeros;
-                        final snack = SnackBar(
-                          behavior: SnackBarBehavior.floating,
-                          backgroundColor: ok
-                              ? AppColors.neonLime
-                              : Colors.redAccent,
-                          content: Text(
-                            ok
-                                ? 'Looks great! ✅'
-                                : 'There are conflicts or empty cells.',
-                            style: TextStyle(
-                              color: ok ? Colors.black : Colors.white,
-                            ),
-                          ),
-                        );
-                        ScaffoldMessenger.of(context).showSnackBar(snack);
-                      },
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -234,7 +422,7 @@ class _GameScreenState extends State<GameScreen> {
         ),
       ),
 
-      // Win banner
+      // Check for win after state updates
       bottomNavigationBar: model.isComplete
           ? Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
