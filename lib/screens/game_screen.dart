@@ -25,6 +25,8 @@ class _GameScreenState extends State<GameScreen> {
 
   // NEW: notes mode switch
   bool notesMode = false;
+  // Highlight same-number taps
+  int? highlightedNumber;
 
   @override
   void initState() {
@@ -50,6 +52,7 @@ class _GameScreenState extends State<GameScreen> {
     _paused = false; // <-- ensure running
     mistakes = 0; // reset mistakes on new game
     _startTimer(); // <-- restart
+    highlightedNumber = null;
     setState(() {});
   }
 
@@ -57,6 +60,8 @@ class _GameScreenState extends State<GameScreen> {
     setState(() {
       selectedRow = r;
       selectedCol = c;
+      final v = model.board[r][c];
+      highlightedNumber = (v != 0) ? v : null;
     });
   }
 
@@ -84,6 +89,12 @@ class _GameScreenState extends State<GameScreen> {
     }
 
     model.setCell(r, c, valueOrNumber);
+    // When a definitive value is entered, highlight that number across the board
+    if (valueOrNumber != null) {
+      highlightedNumber = valueOrNumber;
+    } else {
+      highlightedNumber = null;
+    }
     // If this was a definitive placement (not a note) check for a conflict
     if (valueOrNumber != null) {
       final conflict = model.isConflict(r, c);
@@ -141,6 +152,8 @@ class _GameScreenState extends State<GameScreen> {
       model.clearNotes(r, c);
     } else {
       model.setCell(r, c, null);
+      // clearing a cell should clear number highlights
+      highlightedNumber = null;
     }
     setState(() {});
   }
@@ -358,15 +371,17 @@ class _GameScreenState extends State<GameScreen> {
             ),
             const SizedBox(height: 12),
 
-            // NEW: Notes toggle
+            // Compact action row: Notes and Erase side-by-side above the number pad
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 18.0),
               child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Expanded(
+                  SizedBox(
+                    width: 150,
                     child: OutlinedButton.icon(
                       icon: Icon(notesMode ? Icons.edit_note : Icons.notes),
-                      label: Text(notesMode ? 'Notes: ON' : 'Notes: OFF'),
+                      label: Text(notesMode ? 'Notes: ON' : 'Notes'),
                       style: OutlinedButton.styleFrom(
                         side: BorderSide(
                           color: notesMode
@@ -377,9 +392,31 @@ class _GameScreenState extends State<GameScreen> {
                         foregroundColor: notesMode
                             ? AppColors.neonCyan
                             : AppColors.muted,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        textStyle: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                       onPressed: () => setState(() => notesMode = !notesMode),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  SizedBox(
+                    width: 120,
+                    child: ElevatedButton.icon(
+                      icon: const Icon(Icons.delete_outline),
+                      label: Text(notesMode ? 'Clear' : 'Erase'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.neonViolet,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        textStyle: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      onPressed: _erase,
                     ),
                   ),
                 ],
@@ -402,21 +439,6 @@ class _GameScreenState extends State<GameScreen> {
             ),
             const SizedBox(height: 12),
 
-            // Actions
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 18.0),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      icon: const Icon(Icons.delete_outline),
-                      label: Text(notesMode ? 'Clear Notes' : 'Erase'),
-                      onPressed: _erase,
-                    ),
-                  ),
-                ],
-              ),
-            ),
             const SizedBox(height: 16),
           ],
         ),
@@ -510,7 +532,13 @@ class _GameScreenState extends State<GameScreen> {
             : const BorderSide(color: Colors.transparent, width: 0);
 
         Color cellBg = Colors.transparent;
-        if (selected) cellBg = AppColors.neonCyan.withOpacity(0.12);
+        final hasHighlight =
+            highlightedNumber != null && !isEmpty && value == highlightedNumber;
+        if (selected) {
+          cellBg = AppColors.neonCyan.withOpacity(0.12);
+        } else if (hasHighlight) {
+          cellBg = AppColors.neonPink.withOpacity(0.16);
+        }
 
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
