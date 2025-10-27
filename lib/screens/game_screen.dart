@@ -57,6 +57,7 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   void _onCellTap(int r, int c) {
+    if (_paused) return; // <--- add this
     setState(() {
       selectedRow = r;
       selectedCol = c;
@@ -66,6 +67,7 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   void _onInput(int? valueOrNumber) {
+    if (_paused) return; // <--- add this
     if (selectedRow == null || selectedCol == null) return;
     final r = selectedRow!, c = selectedCol!;
 
@@ -101,7 +103,7 @@ class _GameScreenState extends State<GameScreen> {
       if (conflict) {
         mistakes++;
         if (mistakes >= 3) {
-          _paused = true; // pause timer
+          _pauseTimer(); // pause timer
           // Use a microtask to ensure UI has updated before showing dialog
           Future.microtask(() {
             showDialog<bool>(
@@ -146,6 +148,7 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   void _erase() {
+    if (_paused) return; // <--- add this
     if (selectedRow == null || selectedCol == null) return;
     final r = selectedRow!, c = selectedCol!;
     if (notesMode) {
@@ -167,12 +170,21 @@ class _GameScreenState extends State<GameScreen> {
     });
   }
 
-  void _pauseTimer() => setState(() => _paused = true);
-  void _resumeTimer() => setState(() => _paused = false);
+  void _pauseTimer() {
+    // stop the periodic ticker to fully suspend time updates
+    _ticker?.cancel();
+    setState(() => _paused = true);
+  }
+
+  void _resumeTimer() {
+    // resume ticking and UI
+    setState(() => _paused = false);
+    _startTimer();
+  }
 
   void _checkWin() {
     if (model.isComplete && !_paused) {
-      _paused = true; // pause timer when won
+      _pauseTimer(); // pause timer when won
       showGeneralDialog(
         context: context,
         barrierDismissible: false,
@@ -316,7 +328,7 @@ class _GameScreenState extends State<GameScreen> {
                 _mmss(elapsed),
                 style: TextStyle(
                   fontWeight: FontWeight.w700,
-                  color: AppColors.text,
+                  color: _paused ? AppColors.muted : AppColors.text,
                   fontSize: 14,
                 ),
               ),
@@ -338,108 +350,115 @@ class _GameScreenState extends State<GameScreen> {
         ],
       ),
       body: SafeArea(
-        child: Column(
+        child: Stack(
           children: [
-            const SizedBox(height: 12),
-
-            // Board
-            Expanded(
-              child: Center(
-                child: AspectRatio(
-                  aspectRatio: 1,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: AppColors.card,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppColors.neonPink.withOpacity(0.12),
-                          blurRadius: 18,
-                          spreadRadius: 2,
+            // Your existing game UI
+            Column(
+              children: [
+                const SizedBox(height: 12),
+                // --- Board area (unchanged) ---
+                Expanded(
+                  child: Center(
+                    child: AspectRatio(
+                      aspectRatio: 1,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: AppColors.card,
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppColors.neonPink.withOpacity(0.12),
+                              blurRadius: 18,
+                              spreadRadius: 2,
+                            ),
+                          ],
+                          border: Border.all(
+                            color: AppColors.neonViolet.withOpacity(0.35),
+                            width: 1.2,
+                          ),
                         ),
-                      ],
-                      border: Border.all(
-                        color: AppColors.neonViolet.withOpacity(0.35),
-                        width: 1.2,
+                        padding: const EdgeInsets.all(6),
+                        child: _buildGrid(),
                       ),
                     ),
-                    padding: const EdgeInsets.all(6),
-                    child: _buildGrid(),
                   ),
                 ),
-              ),
-            ),
-            const SizedBox(height: 12),
+                const SizedBox(height: 12),
 
-            // Compact action row: Notes and Erase side-by-side above the number pad
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 18.0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  SizedBox(
-                    width: 150,
-                    child: OutlinedButton.icon(
-                      icon: Icon(notesMode ? Icons.edit_note : Icons.notes),
-                      label: Text(notesMode ? 'Notes: ON' : 'Notes'),
-                      style: OutlinedButton.styleFrom(
-                        side: BorderSide(
-                          color: notesMode
-                              ? AppColors.neonCyan
-                              : AppColors.neonViolet.withOpacity(0.5),
-                          width: 1.6,
-                        ),
-                        foregroundColor: notesMode
-                            ? AppColors.neonCyan
-                            : AppColors.muted,
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        textStyle: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      onPressed: () => setState(() => notesMode = !notesMode),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  SizedBox(
-                    width: 120,
-                    child: ElevatedButton.icon(
-                      icon: const Icon(Icons.delete_outline),
-                      label: Text(notesMode ? 'Clear' : 'Erase'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.neonViolet,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        textStyle: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
+                // --- Actions (unchanged) ---
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 18.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 150,
+                        child: OutlinedButton.icon(
+                          icon: Icon(notesMode ? Icons.edit_note : Icons.notes),
+                          label: Text(notesMode ? 'Notes: ON' : 'Notes'),
+                          style: OutlinedButton.styleFrom(
+                            side: BorderSide(
+                              color: notesMode
+                                  ? AppColors.neonCyan
+                                  : AppColors.neonViolet.withOpacity(0.5),
+                              width: 1.6,
+                            ),
+                            foregroundColor: notesMode
+                                ? AppColors.neonCyan
+                                : AppColors.muted,
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            textStyle: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          onPressed: () =>
+                              setState(() => notesMode = !notesMode),
                         ),
                       ),
-                      onPressed: _erase,
-                    ),
+                      const SizedBox(width: 12),
+                      SizedBox(
+                        width: 120,
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.delete_outline),
+                          label: Text(notesMode ? 'Clear' : 'Erase'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.neonViolet,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            textStyle: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          onPressed: _erase,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
+                ),
+                const SizedBox(height: 8),
 
-            // Number pad
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12.0),
-              child: Wrap(
-                alignment: WrapAlignment.center,
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final n in List<int>.generate(9, (i) => i + 1))
-                    NumKey(label: '$n', onTap: () => _onInput(n)),
-                ],
-              ),
+                // --- Number pad (unchanged) ---
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12.0),
+                  child: Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final n in List<int>.generate(9, (i) => i + 1))
+                        NumKey(label: '$n', onTap: () => _onInput(n)),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const SizedBox(height: 16),
+              ],
             ),
-            const SizedBox(height: 12),
 
-            const SizedBox(height: 16),
+            // --- Full-screen pause overlay ---
+            if (_paused) Positioned.fill(child: _buildPauseOverlay()),
           ],
         ),
       ),
@@ -587,6 +606,79 @@ class _GameScreenState extends State<GameScreen> {
           ),
         );
       },
+    );
+  }
+
+  Widget _buildPauseOverlay() {
+    // top-level container sits above the UI and (because it has a color)
+    // captures pointer events so widgets below can't be interacted with.
+    // We must NOT use AbsorbPointer here because that would prevent the
+    // overlay's own buttons from receiving taps.
+    return Container(
+      color: AppColors.card.withOpacity(0.96), // almost opaque to hide puzzle
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 22),
+          decoration: BoxDecoration(
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.neonViolet.withOpacity(0.25),
+                blurRadius: 28,
+                spreadRadius: 2,
+              ),
+            ],
+            border: Border.all(
+              color: AppColors.neonViolet.withOpacity(0.6),
+              width: 1.6,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.pause_circle_filled_rounded,
+                size: 56,
+                color: AppColors.neonPink,
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Paused',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.neonCyan,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Timer stopped • Board hidden',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: AppColors.muted,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: _resumeTimer,
+                icon: const Icon(Icons.play_arrow_rounded),
+                label: const Text('Resume'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.neonLime,
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 10,
+                  ),
+                  textStyle: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
