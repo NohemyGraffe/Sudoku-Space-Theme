@@ -17,6 +17,7 @@ class _GameScreenState extends State<GameScreen> {
   late SudokuModel model;
   int? selectedRow;
   int? selectedCol;
+  int score = 0;
 
   Timer? _ticker; // runs once per second
   int elapsed = 0; // seconds
@@ -67,14 +68,11 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   void _onInput(int? valueOrNumber) {
-    if (_paused) return; // <--- add this
+    if (_paused) return; // safety: don’t score while paused
     if (selectedRow == null || selectedCol == null) return;
     final r = selectedRow!, c = selectedCol!;
 
     if (notesMode) {
-      debugPrint(
-        'NOTES path: r=$r c=$c v=$valueOrNumber fixed=${model.isFixed(r, c)}',
-      );
       if (valueOrNumber == null) return;
       if (model.isFixed(r, c)) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -83,27 +81,32 @@ class _GameScreenState extends State<GameScreen> {
         return;
       }
       model.toggleNote(r, c, valueOrNumber);
-      debugPrint(
-        'After toggle: notes=${model.notesAt(r, c)} board=${model.board[r][c]}',
-      );
-      setState(() {});
+      setState(() {}); // (no scoring for notes in Option A)
       return;
     }
 
-    model.setCell(r, c, valueOrNumber);
-    // When a definitive value is entered, highlight that number across the board
-    if (valueOrNumber != null) {
-      highlightedNumber = valueOrNumber;
-    } else {
-      highlightedNumber = null;
+    // ---- OPTION A SCORING START ----
+    // Only score the FIRST time you correctly fill an empty cell.
+    final wasEmpty = (model.board[r][c] == 0);
+
+    // If we’re about to place a number into an empty cell, get candidate count BEFORE changing the board.
+    int candBefore = 0;
+    if (valueOrNumber != null && wasEmpty) {
+      candBefore = _candidateCount(r, c);
     }
-    // If this was a definitive placement (not a note) check for a conflict
+    // ---- OPTION A SCORING END (pre-calc) ----
+
+    model.setCell(r, c, valueOrNumber);
+
+    // Highlight logic (unchanged)
+    highlightedNumber = (valueOrNumber != null) ? valueOrNumber : null;
+
     if (valueOrNumber != null) {
       final conflict = model.isConflict(r, c);
       if (conflict) {
         mistakes++;
         if (mistakes >= 3) {
-          _pauseTimer(); // pause timer
+          _pauseTimer();
           // Use a microtask to ensure UI has updated before showing dialog
           Future.microtask(() {
             showDialog<bool>(
@@ -138,12 +141,21 @@ class _GameScreenState extends State<GameScreen> {
             );
           });
         }
+      } else if (wasEmpty) {
+        // ---- OPTION A SCORING APPLY ----
+        // Harder = fewer candidates => more points.
+        // Formula: 20 + (9 - candidateCount) * 5  → ranges ~25..60
+        final gain = 20 + (9 - candBefore) * 5;
+        score = ((score + gain).clamp(0, 999999)).toInt();
+
+        // (Optional) quick feedback:
+        // ScaffoldMessenger.of(context).showSnackBar(
+        //   SnackBar(content: Text('+$gain points!'), duration: Duration(milliseconds: 600)),
+        // );
       }
     }
 
-    // After any move, check if we won
     Future.microtask(() => _checkWin());
-
     setState(() {});
   }
 
@@ -287,67 +299,104 @@ class _GameScreenState extends State<GameScreen> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.transparent,
-        centerTitle: true,
-        title: ShaderMask(
-          shaderCallback: (rect) => const LinearGradient(
-            colors: [
-              AppColors.neonPink,
-              AppColors.neonCyan,
-              AppColors.neonLime,
-            ],
-          ).createShader(rect),
-          child: Text('${difficultyLabel(model.currentDifficulty)} • Sudoku'),
+        automaticallyImplyLeading: false,
+        titleSpacing: 0,
+        toolbarHeight: 120, // Increase height to prevent cutting off
+        title: Stack(
+          children: [
+            // Back arrow in top-left
+            Positioned(
+              left: 8,
+              top: 0,
+              child: IconButton(
+                icon: const Icon(
+                  Icons.arrow_back_rounded,
+                  color: AppColors.neonCyan,
+                ),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ),
+            // Game metrics below
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 48, 12, 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  // LEFT: SCORE
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.card.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: AppColors.neonLime.withOpacity(0.25),
+                      ),
+                    ),
+                    child: Text(
+                      'Score: $score',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.neonLime,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+
+                  // CENTER: MISTAKES
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.card.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: AppColors.neonPink.withOpacity(0.25),
+                      ),
+                    ),
+                    child: Text(
+                      'Mistakes: $mistakes/3',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.neonPink,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+
+                  // RIGHT: TIMER + BUTTONS
+                  Row(
+                    children: [
+                      Text(
+                        _mmss(elapsed),
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: _paused ? AppColors.muted : AppColors.text,
+                          fontSize: 14,
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: _paused ? 'Resume' : 'Pause',
+                        icon: Icon(
+                          _paused
+                              ? Icons.play_arrow_rounded
+                              : Icons.pause_rounded,
+                          color: AppColors.neonCyan,
+                        ),
+                        onPressed: () =>
+                            _paused ? _resumeTimer() : _pauseTimer(),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
-        actions: [
-          // MISTAKES UI (decorated to prevent blending / clipping)
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              decoration: BoxDecoration(
-                color: AppColors.card.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppColors.neonPink.withOpacity(0.22)),
-              ),
-              child: Text(
-                'Mistakes: $mistakes/3',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.neonPink,
-                  fontSize: 13,
-                ),
-              ),
-            ),
-          ),
-
-          // TIMER UI
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: Text(
-                _mmss(elapsed),
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  color: _paused ? AppColors.muted : AppColors.text,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-          ),
-          IconButton(
-            tooltip: _paused ? 'Resume' : 'Pause',
-            icon: Icon(
-              _paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
-            ),
-            onPressed: () => _paused ? _resumeTimer() : _pauseTimer(),
-          ),
-
-          IconButton(
-            tooltip: 'New Game',
-            onPressed: _newGame,
-            icon: const Icon(Icons.refresh),
-          ),
-        ],
       ),
       body: SafeArea(
         child: Stack(
@@ -607,6 +656,40 @@ class _GameScreenState extends State<GameScreen> {
         );
       },
     );
+  }
+
+  // Count possible candidates for an empty cell (1..9 not present in row/col/box)
+  int _candidateCount(int r, int c) {
+    // If already filled, treat as no candidates (won’t be scored)
+    if (model.board[r][c] != 0) return 0;
+
+    final used = <int>{};
+
+    // row
+    for (var cc = 0; cc < 9; cc++) {
+      final v = model.board[r][cc];
+      if (v != 0) used.add(v);
+    }
+    // col
+    for (var rr = 0; rr < 9; rr++) {
+      final v = model.board[rr][c];
+      if (v != 0) used.add(v);
+    }
+    // 3x3 box
+    final br = (r ~/ 3) * 3, bc = (c ~/ 3) * 3;
+    for (var rr = br; rr < br + 3; rr++) {
+      for (var cc = bc; cc < bc + 3; cc++) {
+        final v = model.board[rr][cc];
+        if (v != 0) used.add(v);
+      }
+    }
+
+    // candidates = numbers 1..9 not used
+    var cnt = 0;
+    for (var n = 1; n <= 9; n++) {
+      if (!used.contains(n)) cnt++;
+    }
+    return cnt;
   }
 
   Widget _buildPauseOverlay() {
