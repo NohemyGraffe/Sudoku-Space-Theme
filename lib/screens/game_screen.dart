@@ -4,6 +4,7 @@ import '../models/sudoku_board.dart';
 import '../models/difficulty.dart';
 import '../widgets/num_key.dart';
 import 'dart:async'; // <-- add this for Timer
+import 'dart:ui'; // for ImageFilter.blur
 
 class GameScreen extends StatefulWidget {
   final Difficulty startDifficulty;
@@ -28,6 +29,13 @@ class _GameScreenState extends State<GameScreen> {
   bool notesMode = false;
   // Highlight same-number taps
   int? highlightedNumber;
+  // Track if a modal dialog is open to suppress pause overlay
+  bool _modalOpen = false;
+
+  // Undo history: list of board snapshots
+  final List<List<List<int>>> _undoHistory = [];
+  final List<Map<String, Set<int>>> _undoNotesHistory = [];
+  final List<int> _undoScoreHistory = [];
 
   @override
   void initState() {
@@ -54,6 +62,59 @@ class _GameScreenState extends State<GameScreen> {
     mistakes = 0; // reset mistakes on new game
     _startTimer(); // <-- restart
     highlightedNumber = null;
+    _undoHistory.clear();
+    _undoNotesHistory.clear();
+    _undoScoreHistory.clear();
+    setState(() {});
+  }
+
+  void _saveState() {
+    // Save current board state for undo
+    _undoHistory.add(model.board.map((row) => List<int>.from(row)).toList());
+    // Save notes state
+    final notesSnapshot = <String, Set<int>>{};
+    for (var r = 0; r < 9; r++) {
+      for (var c = 0; c < 9; c++) {
+        final notes = model.notesAt(r, c);
+        if (notes.isNotEmpty) {
+          notesSnapshot['$r,$c'] = Set<int>.from(notes);
+        }
+      }
+    }
+    _undoNotesHistory.add(notesSnapshot);
+    _undoScoreHistory.add(score);
+  }
+
+  void _undo() {
+    if (_undoHistory.isEmpty) return;
+
+    // Restore previous state
+    final prevBoard = _undoHistory.removeLast();
+    final prevNotes = _undoNotesHistory.removeLast();
+    final prevScore = _undoScoreHistory.removeLast();
+
+    // Restore board
+    for (var r = 0; r < 9; r++) {
+      for (var c = 0; c < 9; c++) {
+        model.board[r][c] = prevBoard[r][c];
+      }
+    }
+
+    // Restore notes - clear all first
+    for (var r = 0; r < 9; r++) {
+      for (var c = 0; c < 9; c++) {
+        model.notes[r][c].clear();
+      }
+    }
+    // Then restore saved notes
+    prevNotes.forEach((key, notes) {
+      final parts = key.split(',');
+      final r = int.parse(parts[0]);
+      final c = int.parse(parts[1]);
+      model.notes[r][c].addAll(notes);
+    });
+
+    score = prevScore;
     setState(() {});
   }
 
@@ -80,6 +141,7 @@ class _GameScreenState extends State<GameScreen> {
         );
         return;
       }
+      _saveState(); // Save before modifying
       model.toggleNote(r, c, valueOrNumber);
       setState(() {}); // (no scoring for notes in Option A)
       return;
@@ -89,13 +151,14 @@ class _GameScreenState extends State<GameScreen> {
     // Only score the FIRST time you correctly fill an empty cell.
     final wasEmpty = (model.board[r][c] == 0);
 
-    // If we’re about to place a number into an empty cell, get candidate count BEFORE changing the board.
+    // If we're about to place a number into an empty cell, get candidate count BEFORE changing the board.
     int candBefore = 0;
     if (valueOrNumber != null && wasEmpty) {
       candBefore = _candidateCount(r, c);
     }
     // ---- OPTION A SCORING END (pre-calc) ----
 
+    _saveState(); // Save before modifying
     model.setCell(r, c, valueOrNumber);
 
     // Highlight logic (unchanged)
@@ -107,6 +170,8 @@ class _GameScreenState extends State<GameScreen> {
         mistakes++;
         if (mistakes >= 3) {
           _pauseTimer();
+          // Mark modal open to suppress pause overlay while dialog is visible
+          if (mounted) setState(() => _modalOpen = true);
           // Use a microtask to ensure UI has updated before showing dialog
           Future.microtask(() {
             showDialog<bool>(
@@ -124,6 +189,8 @@ class _GameScreenState extends State<GameScreen> {
                 actions: [
                   TextButton(
                     onPressed: () {
+                      // Close modal state before navigating
+                      if (mounted) setState(() => _modalOpen = false);
                       Navigator.pop(ctx); // close dialog
                       _newGame();
                     },
@@ -131,6 +198,7 @@ class _GameScreenState extends State<GameScreen> {
                   ),
                   TextButton(
                     onPressed: () {
+                      if (mounted) setState(() => _modalOpen = false);
                       Navigator.pop(ctx); // close dialog
                       Navigator.pop(context); // return to home
                     },
@@ -163,6 +231,7 @@ class _GameScreenState extends State<GameScreen> {
     if (_paused) return; // <--- add this
     if (selectedRow == null || selectedCol == null) return;
     final r = selectedRow!, c = selectedCol!;
+    _saveState(); // Save before modifying
     if (notesMode) {
       model.clearNotes(r, c);
     } else {
@@ -197,6 +266,7 @@ class _GameScreenState extends State<GameScreen> {
   void _checkWin() {
     if (model.isComplete && !_paused) {
       _pauseTimer(); // pause timer when won
+      if (mounted) setState(() => _modalOpen = true);
       showGeneralDialog(
         context: context,
         barrierDismissible: false,
@@ -253,6 +323,7 @@ class _GameScreenState extends State<GameScreen> {
                     children: [
                       TextButton(
                         onPressed: () {
+                          if (mounted) setState(() => _modalOpen = false);
                           Navigator.pop(context); // close dialog
                           _newGame();
                         },
@@ -266,6 +337,7 @@ class _GameScreenState extends State<GameScreen> {
                       ),
                       TextButton(
                         onPressed: () {
+                          if (mounted) setState(() => _modalOpen = false);
                           Navigator.pop(context); // close dialog
                           Navigator.pop(context); // return to home
                         },
@@ -296,118 +368,129 @@ class _GameScreenState extends State<GameScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        automaticallyImplyLeading: false,
-        titleSpacing: 0,
-        toolbarHeight: 120, // Increase height to prevent cutting off
-        title: Stack(
-          children: [
-            // Back arrow in top-left
-            Positioned(
-              left: 8,
-              top: 0,
-              child: IconButton(
-                icon: const Icon(
-                  Icons.arrow_back_rounded,
-                  color: AppColors.neonCyan,
+    return ScrollConfiguration(
+      behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+      child: Scaffold(
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          automaticallyImplyLeading: false,
+          titleSpacing: 0,
+          toolbarHeight: 80, // Further reduced
+          title: Stack(
+            children: [
+              // Back arrow in top-left
+              Positioned(
+                left: 8,
+                top: 0,
+                child: IconButton(
+                  icon: const Icon(
+                    Icons.arrow_back_rounded,
+                    color: AppColors.neonCyan,
+                  ),
+                  onPressed: () => Navigator.pop(context),
                 ),
-                onPressed: () => Navigator.pop(context),
               ),
-            ),
-            // Game metrics below
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 48, 12, 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  // LEFT: SCORE
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppColors.card.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                        color: AppColors.neonLime.withOpacity(0.25),
-                      ),
-                    ),
-                    child: Text(
-                      'Score: $score',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.neonLime,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ),
-
-                  // CENTER: MISTAKES
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppColors.card.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                        color: AppColors.neonPink.withOpacity(0.25),
-                      ),
-                    ),
-                    child: Text(
-                      'Mistakes: $mistakes/3',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.neonPink,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ),
-
-                  // RIGHT: TIMER + BUTTONS
-                  Row(
-                    children: [
-                      Text(
-                        _mmss(elapsed),
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: _paused ? AppColors.muted : AppColors.text,
-                          fontSize: 14,
+              // Game metrics below
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 40, 12, 2),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        // LEFT: SCORE
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppColors.card.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: AppColors.neonLime.withOpacity(0.25),
+                            ),
+                          ),
+                          child: Text(
+                            'Score: $score',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.neonLime,
+                              fontSize: 13,
+                            ),
+                          ),
                         ),
-                      ),
-                      IconButton(
-                        tooltip: _paused ? 'Resume' : 'Pause',
-                        icon: Icon(
-                          _paused
-                              ? Icons.play_arrow_rounded
-                              : Icons.pause_rounded,
-                          color: AppColors.neonCyan,
+
+                        // CENTER: MISTAKES
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppColors.card.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: AppColors.neonPink.withOpacity(0.25),
+                            ),
+                          ),
+                          child: Text(
+                            'Mistakes: $mistakes/3',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.neonPink,
+                              fontSize: 13,
+                            ),
+                          ),
                         ),
-                        onPressed: () =>
-                            _paused ? _resumeTimer() : _pauseTimer(),
-                      ),
-                    ],
-                  ),
-                ],
+
+                        // RIGHT: TIMER + BUTTONS
+                        Row(
+                          children: [
+                            Text(
+                              _mmss(elapsed),
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: _paused
+                                    ? AppColors.muted
+                                    : AppColors.text,
+                                fontSize: 14,
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: _paused ? 'Resume' : 'Pause',
+                              icon: Icon(
+                                _paused
+                                    ? Icons.play_arrow_rounded
+                                    : Icons.pause_rounded,
+                                color: AppColors.neonCyan,
+                              ),
+                              onPressed: () =>
+                                  _paused ? _resumeTimer() : _pauseTimer(),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
-      body: SafeArea(
-        child: Stack(
-          children: [
-            // Your existing game UI
-            Column(
-              children: [
-                const SizedBox(height: 12),
-                // --- Board area (unchanged) ---
-                Expanded(
-                  child: Center(
+        body: SafeArea(
+          top: false, // Remove top SafeArea padding
+          child: Stack(
+            children: [
+              // Your existing game UI
+              Column(
+                children: [
+                  // Extra space between top widgets and the puzzle board
+                  const SizedBox(height: 12),
+                  // --- Board area (top-aligned, no extra expansion) ---
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6.0),
                     child: AspectRatio(
                       aspectRatio: 1,
                       child: Container(
@@ -421,126 +504,220 @@ class _GameScreenState extends State<GameScreen> {
                               spreadRadius: 2,
                             ),
                           ],
-                          border: Border.all(
-                            color: AppColors.neonViolet.withOpacity(0.35),
-                            width: 1.2,
-                          ),
                         ),
-                        padding: const EdgeInsets.all(6),
+                        padding: const EdgeInsets.all(4),
                         child: _buildGrid(),
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 12),
-
-                // --- Actions (unchanged) ---
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 18.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      SizedBox(
-                        width: 150,
-                        child: OutlinedButton.icon(
-                          icon: Icon(notesMode ? Icons.edit_note : Icons.notes),
-                          label: Text(notesMode ? 'Notes: ON' : 'Notes'),
-                          style: OutlinedButton.styleFrom(
-                            side: BorderSide(
-                              color: notesMode
-                                  ? AppColors.neonCyan
-                                  : AppColors.neonViolet.withOpacity(0.5),
-                              width: 1.6,
+                  const SizedBox(
+                    height: 50,
+                  ), // Increased space between board and actions
+                  // --- Actions (unchanged) ---
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 18.0),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            GestureDetector(
+                              onTap: _undoHistory.isEmpty ? null : _undo,
+                              child: Icon(
+                                Icons.undo_rounded,
+                                size: 32,
+                                color: _undoHistory.isEmpty
+                                    ? AppColors.muted.withOpacity(0.3)
+                                    : AppColors.muted,
+                              ),
                             ),
-                            foregroundColor: notesMode
-                                ? AppColors.neonCyan
-                                : AppColors.muted,
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            textStyle: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
+                            const SizedBox(height: 4),
+                            Text(
+                              'Undo',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: _undoHistory.isEmpty
+                                    ? AppColors.muted.withOpacity(0.3)
+                                    : AppColors.muted,
+                              ),
                             ),
-                          ),
-                          onPressed: () =>
-                              setState(() => notesMode = !notesMode),
+                          ],
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      SizedBox(
-                        width: 120,
-                        child: ElevatedButton.icon(
-                          icon: const Icon(Icons.delete_outline),
-                          label: Text(notesMode ? 'Clear' : 'Erase'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.neonViolet,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            textStyle: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
+                        const SizedBox(width: 40),
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            GestureDetector(
+                              onTap: _erase,
+                              child: Icon(
+                                Icons.auto_fix_high_rounded,
+                                size: 32,
+                                color: AppColors.muted,
+                              ),
                             ),
-                          ),
-                          onPressed: _erase,
+                            const SizedBox(height: 4),
+                            Text(
+                              'Erase',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.muted,
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
-                    ],
+                        const SizedBox(width: 40),
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            GestureDetector(
+                              onTap: () =>
+                                  setState(() => notesMode = !notesMode),
+                              child: Icon(
+                                notesMode
+                                    ? Icons.edit
+                                    : Icons.mode_edit_outline_outlined,
+                                size: 32,
+                                color: notesMode
+                                    ? AppColors.neonCyan
+                                    : AppColors.muted,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Notes',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: notesMode
+                                    ? AppColors.neonCyan
+                                    : AppColors.muted,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
+                  const SizedBox(
+                    height: 40,
+                  ), // 40px space between actions and keypad
+                  // --- Number pad: force-fit single horizontal row ---
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12.0),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final available = constraints.maxWidth;
+                        const keys = 9;
 
-                // --- Number pad (unchanged) ---
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12.0),
-                  child: Wrap(
-                    alignment: WrapAlignment.center,
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final n in List<int>.generate(9, (i) => i + 1))
-                        NumKey(label: '$n', onTap: () => _onInput(n)),
-                    ],
+                        // Try progressively smaller spacings so keys can fit without scrolling.
+                        // Make spacing tighter so keys are visually closer together.
+                        final spacingOptions = [4.0, 2.0, 1.0, 0.0];
+                        // Slightly increase min width so keys are more visible, but still fit
+                        const minKeySize = 30.0;
+                        const maxKeySize = 64.0;
+
+                        double chosenSpacing = spacingOptions.first;
+                        double computedSize = minKeySize;
+                        bool fitted = false;
+
+                        for (final s in spacingOptions) {
+                          final totalSpacing = s * (keys - 1);
+                          final candidate = (available - totalSpacing) / keys;
+                          if (candidate >= minKeySize) {
+                            chosenSpacing = s;
+                            computedSize = candidate.clamp(
+                              minKeySize,
+                              maxKeySize,
+                            );
+                            fitted = true;
+                            break;
+                          }
+                        }
+
+                        // As a fallback, if none of the spacings produced a candidate >= minKeySize,
+                        // compute a key size that fits even on very narrow screens.
+                        if (!fitted) {
+                          chosenSpacing =
+                              spacingOptions.last; // tightest spacing
+                          final totalSpacing = chosenSpacing * (keys - 1);
+                          final candidate = (available - totalSpacing) / keys;
+                          // allow going smaller than min to avoid overflow on extreme cases
+                          computedSize = candidate.clamp(12.0, maxKeySize);
+                        }
+
+                        final keySize = computedSize;
+
+                        return Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            for (final n in List<int>.generate(
+                              keys,
+                              (i) => i + 1,
+                            )) ...[
+                              NumKey(
+                                size: keySize,
+                                label: '$n',
+                                onTap: () => _onInput(n),
+                              ),
+                              if (n != keys) SizedBox(width: chosenSpacing),
+                            ],
+                          ],
+                        );
+                      },
+                    ),
                   ),
-                ),
-                const SizedBox(height: 12),
-                const SizedBox(height: 16),
-              ],
-            ),
-
-            // --- Full-screen pause overlay ---
-            if (_paused) Positioned.fill(child: _buildPauseOverlay()),
-          ],
-        ),
-      ),
-
-      // Check for win after state updates
-      bottomNavigationBar: model.isComplete
-          ? Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: AppColors.card,
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.neonLime.withOpacity(0.25),
-                    blurRadius: 24,
-                    spreadRadius: 2,
-                  ),
+                  const SizedBox(
+                    height: 2,
+                  ), // Reduced from 12 for compact layout
+                  const SizedBox(
+                    height: 2,
+                  ), // Reduced from 16 for compact layout
                 ],
-                border: const Border(
-                  top: BorderSide(color: AppColors.neonLime, width: 2),
-                ),
               ),
-              child: const Text(
-                '🎉 Completed! You’re glowing.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: AppColors.neonLime,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
-                  letterSpacing: 0.4,
+
+              // --- Full-screen pause overlay ---
+              if (_paused && !_modalOpen)
+                Positioned.fill(child: _buildPauseOverlay()),
+            ],
+          ),
+        ),
+
+        // Check for win after state updates
+        bottomNavigationBar: model.isComplete
+            ? Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
                 ),
-              ),
-            )
-          : null,
+                decoration: BoxDecoration(
+                  color: AppColors.card,
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.neonLime.withOpacity(0.25),
+                      blurRadius: 24,
+                      spreadRadius: 2,
+                    ),
+                  ],
+                  border: const Border(
+                    top: BorderSide(color: AppColors.neonLime, width: 2),
+                  ),
+                ),
+                child: const Text(
+                  '🎉 Completed! You’re glowing.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: AppColors.neonLime,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+              )
+            : null,
+      ),
     );
   }
 
@@ -693,75 +870,85 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   Widget _buildPauseOverlay() {
-    // top-level container sits above the UI and (because it has a color)
-    // captures pointer events so widgets below can't be interacted with.
-    // We must NOT use AbsorbPointer here because that would prevent the
-    // overlay's own buttons from receiving taps.
-    return Container(
-      color: AppColors.card.withOpacity(0.96), // almost opaque to hide puzzle
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 22),
-          decoration: BoxDecoration(
-            color: AppColors.card,
-            borderRadius: BorderRadius.circular(20),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.neonViolet.withOpacity(0.25),
-                blurRadius: 28,
-                spreadRadius: 2,
-              ),
-            ],
-            border: Border.all(
-              color: AppColors.neonViolet.withOpacity(0.6),
-              width: 1.6,
+    // A blur + tinted overlay to completely obscure puzzle details while paused.
+    // Use BackdropFilter to blur content behind, plus a semi-opaque tint.
+    return Stack(
+      children: [
+        // Blur and dim the entire background so numbers are indistinguishable
+        Positioned.fill(
+          child: ClipRect(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+              child: Container(color: AppColors.card.withOpacity(0.60)),
             ),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.pause_circle_filled_rounded,
-                size: 56,
-                color: AppColors.neonPink,
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'Paused',
-                style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.neonCyan,
+        ),
+
+        // Foreground pause panel
+        Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 22),
+            decoration: BoxDecoration(
+              color: AppColors.card,
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.neonViolet.withOpacity(0.25),
+                  blurRadius: 28,
+                  spreadRadius: 2,
                 ),
+              ],
+              border: Border.all(
+                color: AppColors.neonViolet.withOpacity(0.6),
+                width: 1.6,
               ),
-              const SizedBox(height: 10),
-              Text(
-                'Timer stopped • Board hidden',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: AppColors.muted,
-                  fontWeight: FontWeight.w600,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.pause_circle_filled_rounded,
+                  size: 56,
+                  color: AppColors.neonPink,
                 ),
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton.icon(
-                onPressed: _resumeTimer,
-                icon: const Icon(Icons.play_arrow_rounded),
-                label: const Text('Resume'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.neonLime,
-                  foregroundColor: Colors.black,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 10,
+                const SizedBox(height: 12),
+                const Text(
+                  'Paused',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.neonCyan,
                   ),
-                  textStyle: const TextStyle(fontWeight: FontWeight.w800),
                 ),
-              ),
-            ],
+                const SizedBox(height: 10),
+                Text(
+                  'Timer stopped • Board hidden',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: AppColors.muted,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                ElevatedButton.icon(
+                  onPressed: _resumeTimer,
+                  icon: const Icon(Icons.play_arrow_rounded),
+                  label: const Text('Resume'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.neonLime,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 10,
+                    ),
+                    textStyle: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
-      ),
+      ],
     );
   }
 }

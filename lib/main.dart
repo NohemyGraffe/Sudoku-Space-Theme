@@ -12,6 +12,10 @@ class SudokuApp extends StatelessWidget {
     return MaterialApp(
       title: 'Sudoku',
       debugShowCheckedModeBanner: false,
+      // Hide platform scrollbars globally (desktop/web)
+      scrollBehavior: const MaterialScrollBehavior().copyWith(
+        scrollbars: false,
+      ),
       theme: neonTheme,
       home: const HomeScreen(),
     );
