@@ -48,6 +48,8 @@ class _GameScreenState extends State<GameScreen> {
     super.initState();
     model = SudokuModel()..loadRandom(widget.startDifficulty);
     _startTimer(); // start ticking once model exists
+    // Record that this difficulty is now the last-opened game
+    GamePersistence.setLastOpened(widget.startDifficulty, elapsedSeconds: 0);
 
     // Try loading a previously saved game for this difficulty
     _tryLoadSaved();
@@ -66,18 +68,33 @@ class _GameScreenState extends State<GameScreen> {
 
   Future<void> _tryLoadSaved() async {
     final loaded = await GamePersistence.load(widget.startDifficulty);
-    if (loaded == null) return;
+    if (loaded == null) {
+      // No saved game yet for this difficulty; persist initial state so Continue can find it
+      await _persist();
+      return;
+    }
     if (!mounted) return;
     setState(() {
       model = loaded.model;
       elapsed = loaded.elapsedSeconds;
       score = loaded.score;
+      mistakes = loaded.mistakes;
       // keep other UI state as-is
     });
+    // Ensure last-opened points to this resumed game with accurate elapsed
+    await GamePersistence.setLastOpened(
+      model.currentDifficulty,
+      elapsedSeconds: elapsed,
+    );
   }
 
   Future<void> _persist() async {
-    await GamePersistence.save(model, elapsedSeconds: elapsed, score: score);
+    await GamePersistence.save(
+      model,
+      elapsedSeconds: elapsed,
+      score: score,
+      mistakes: mistakes,
+    );
   }
 
   void _newGame() {
@@ -96,6 +113,8 @@ class _GameScreenState extends State<GameScreen> {
     setState(() {});
     // Save the new fresh game state
     _persist();
+    // Update last-opened to this fresh game
+    GamePersistence.setLastOpened(model.currentDifficulty, elapsedSeconds: 0);
   }
 
   // Reset the current puzzle to its initial state (same puzzle)
@@ -120,6 +139,8 @@ class _GameScreenState extends State<GameScreen> {
     _startTimer();
     setState(() {});
     _persist();
+    // Keep last-opened pointing to this difficulty and reset elapsed
+    GamePersistence.setLastOpened(model.currentDifficulty, elapsedSeconds: 0);
   }
 
   void _saveState() {
@@ -470,6 +491,23 @@ class _GameScreenState extends State<GameScreen> {
           toolbarHeight: 80, // Further reduced
           title: Stack(
             children: [
+              // Centered difficulty label at the very top
+              Align(
+                alignment: Alignment.topCenter,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 10.0),
+                  child: Text(
+                    difficultyLabel(model.currentDifficulty),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: AppColors.neonCyan,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.3,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ),
               // Back arrow in top-left
               Positioned(
                 left: 8,
@@ -609,42 +647,51 @@ class _GameScreenState extends State<GameScreen> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        // Undo
-                        Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            GestureDetector(
-                              onTapDown: _undoHistory.isEmpty
-                                  ? null
-                                  : (_) => setState(() => _undoPressed = true),
-                              onTapCancel: _undoHistory.isEmpty
-                                  ? null
-                                  : () => setState(() => _undoPressed = false),
-                              onTap: _undoHistory.isEmpty
-                                  ? null
-                                  : () {
-                                      setState(() => _undoPressed = false);
-                                      _undo();
-                                    },
-                              child: AnimatedScale(
-                                scale: _undoPressed ? 0.92 : 1.0,
-                                duration: const Duration(milliseconds: 90),
-                                curve: Curves.easeOut,
-                                child: AnimatedContainer(
+                        // Undo (entire column is clickable: icon + label)
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTapDown: (_) {
+                            if (_undoHistory.isEmpty) return;
+                            setState(() => _undoPressed = true);
+                          },
+                          onTapUp: (_) {
+                            if (_undoHistory.isEmpty) return;
+                            setState(() => _undoPressed = false);
+                          },
+                          onTapCancel: () {
+                            if (_undoHistory.isEmpty) return;
+                            setState(() => _undoPressed = false);
+                          },
+                          onTap: () {
+                            if (_undoHistory.isEmpty) return;
+                            _undo();
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: _undoPressed
+                                  ? [
+                                      BoxShadow(
+                                        color: AppColors.neonCyan.withOpacity(
+                                          0.35,
+                                        ),
+                                        blurRadius: 14,
+                                        spreadRadius: 1,
+                                      ),
+                                    ]
+                                  : [],
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                AnimatedScale(
+                                  scale: _undoPressed ? 0.92 : 1.0,
                                   duration: const Duration(milliseconds: 90),
                                   curve: Curves.easeOut,
-                                  decoration: BoxDecoration(
-                                    boxShadow: _undoPressed
-                                        ? [
-                                            BoxShadow(
-                                              color: AppColors.neonCyan
-                                                  .withOpacity(0.45),
-                                              blurRadius: 16,
-                                              spreadRadius: 2,
-                                            ),
-                                          ]
-                                        : [],
-                                  ),
                                   child: Icon(
                                     Icons.undo_rounded,
                                     size: 32,
@@ -653,108 +700,118 @@ class _GameScreenState extends State<GameScreen> {
                                         : AppColors.muted,
                                   ),
                                 ),
-                              ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Undo',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: _undoHistory.isEmpty
+                                        ? AppColors.muted.withOpacity(0.3)
+                                        : AppColors.muted,
+                                  ),
+                                ),
+                              ],
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Undo',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: _undoHistory.isEmpty
-                                    ? AppColors.muted.withOpacity(0.3)
-                                    : AppColors.muted,
-                              ),
-                            ),
-                          ],
+                          ),
                         ),
                         const SizedBox(width: 40),
-                        // Erase
-                        Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            GestureDetector(
-                              onTapDown: (_) =>
-                                  setState(() => _erasePressed = true),
-                              onTapCancel: () =>
-                                  setState(() => _erasePressed = false),
-                              onTap: () {
-                                setState(() => _erasePressed = false);
-                                _erase();
-                              },
-                              child: AnimatedScale(
-                                scale: _erasePressed ? 0.92 : 1.0,
-                                duration: const Duration(milliseconds: 90),
-                                curve: Curves.easeOut,
-                                child: AnimatedContainer(
+                        // Erase (entire column is clickable: icon + label)
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTapDown: (_) =>
+                              setState(() => _erasePressed = true),
+                          onTapUp: (_) => setState(() => _erasePressed = false),
+                          onTapCancel: () =>
+                              setState(() => _erasePressed = false),
+                          onTap: () {
+                            _erase();
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: _erasePressed
+                                  ? [
+                                      BoxShadow(
+                                        color: AppColors.neonPink.withOpacity(
+                                          0.35,
+                                        ),
+                                        blurRadius: 14,
+                                        spreadRadius: 1,
+                                      ),
+                                    ]
+                                  : [],
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                AnimatedScale(
+                                  scale: _erasePressed ? 0.92 : 1.0,
                                   duration: const Duration(milliseconds: 90),
                                   curve: Curves.easeOut,
-                                  decoration: BoxDecoration(
-                                    boxShadow: _erasePressed
-                                        ? [
-                                            BoxShadow(
-                                              color: AppColors.neonPink
-                                                  .withOpacity(0.45),
-                                              blurRadius: 16,
-                                              spreadRadius: 2,
-                                            ),
-                                          ]
-                                        : [],
-                                  ),
-                                  child: Icon(
+                                  child: const Icon(
                                     Icons.auto_fix_high_rounded,
                                     size: 32,
                                     color: AppColors.muted,
                                   ),
                                 ),
-                              ),
+                                const SizedBox(height: 4),
+                                const Text(
+                                  'Erase',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.muted,
+                                  ),
+                                ),
+                              ],
                             ),
-                            const SizedBox(height: 4),
-                            const Text(
-                              'Erase',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.muted,
-                              ),
-                            ),
-                          ],
+                          ),
                         ),
                         const SizedBox(width: 40),
-                        // Notes
-                        Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            GestureDetector(
-                              onTapDown: (_) =>
-                                  setState(() => _notesPressed = true),
-                              onTapCancel: () =>
-                                  setState(() => _notesPressed = false),
-                              onTap: () {
-                                setState(() {
-                                  _notesPressed = false;
-                                  notesMode = !notesMode;
-                                });
-                              },
-                              child: AnimatedScale(
-                                scale: _notesPressed ? 0.92 : 1.0,
-                                duration: const Duration(milliseconds: 90),
-                                curve: Curves.easeOut,
-                                child: AnimatedContainer(
+                        // Notes (entire column is clickable: icon + label)
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTapDown: (_) =>
+                              setState(() => _notesPressed = true),
+                          onTapUp: (_) => setState(() => _notesPressed = false),
+                          onTapCancel: () =>
+                              setState(() => _notesPressed = false),
+                          onTap: () {
+                            setState(() {
+                              notesMode = !notesMode;
+                            });
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: _notesPressed
+                                  ? [
+                                      BoxShadow(
+                                        color: AppColors.neonCyan.withOpacity(
+                                          0.35,
+                                        ),
+                                        blurRadius: 14,
+                                        spreadRadius: 1,
+                                      ),
+                                    ]
+                                  : [],
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                AnimatedScale(
+                                  scale: _notesPressed ? 0.92 : 1.0,
                                   duration: const Duration(milliseconds: 90),
                                   curve: Curves.easeOut,
-                                  decoration: BoxDecoration(
-                                    boxShadow: _notesPressed
-                                        ? [
-                                            BoxShadow(
-                                              color: AppColors.neonCyan
-                                                  .withOpacity(0.45),
-                                              blurRadius: 16,
-                                              spreadRadius: 2,
-                                            ),
-                                          ]
-                                        : [],
-                                  ),
                                   child: Icon(
                                     notesMode
                                         ? Icons.edit
@@ -765,20 +822,20 @@ class _GameScreenState extends State<GameScreen> {
                                         : AppColors.muted,
                                   ),
                                 ),
-                              ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Notes',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: notesMode
+                                        ? AppColors.neonCyan
+                                        : AppColors.muted,
+                                  ),
+                                ),
+                              ],
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Notes',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: notesMode
-                                    ? AppColors.neonCyan
-                                    : AppColors.muted,
-                              ),
-                            ),
-                          ],
+                          ),
                         ),
                       ],
                     ),
@@ -792,7 +849,15 @@ class _GameScreenState extends State<GameScreen> {
                     child: LayoutBuilder(
                       builder: (context, constraints) {
                         final available = constraints.maxWidth;
-                        const keys = 9;
+
+                        // Determine which numbers are still available (not fully placed yet).
+                        final allNums = List<int>.generate(9, (i) => i + 1);
+                        final completed = _completedNumbers();
+                        final nums = [
+                          for (final n in allNums)
+                            if (!completed.contains(n)) n,
+                        ];
+                        final keys = nums.length;
 
                         // Try progressively smaller spacings so keys can fit without scrolling.
                         // Make spacing tighter so keys are visually closer together.
@@ -835,16 +900,14 @@ class _GameScreenState extends State<GameScreen> {
                         return Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            for (final n in List<int>.generate(
-                              keys,
-                              (i) => i + 1,
-                            )) ...[
+                            for (int i = 0; i < nums.length; i++) ...[
                               NumKey(
                                 size: keySize,
-                                label: '$n',
-                                onTap: () => _onInput(n),
+                                label: '${nums[i]}',
+                                onTap: () => _onInput(nums[i]),
                               ),
-                              if (n != keys) SizedBox(width: chosenSpacing),
+                              if (i != nums.length - 1)
+                                SizedBox(width: chosenSpacing),
                             ],
                           ],
                         );
@@ -1088,6 +1151,22 @@ class _GameScreenState extends State<GameScreen> {
       if (!used.contains(n)) cnt++;
     }
     return cnt;
+  }
+
+  // Compute which numbers are fully placed on the board (9 or more occurrences).
+  Set<int> _completedNumbers() {
+    final counts = List<int>.filled(10, 0); // 1..9
+    for (var r = 0; r < 9; r++) {
+      for (var c = 0; c < 9; c++) {
+        final v = model.board[r][c];
+        if (v >= 1 && v <= 9) counts[v]++;
+      }
+    }
+    final done = <int>{};
+    for (var n = 1; n <= 9; n++) {
+      if (counts[n] >= 9) done.add(n);
+    }
+    return done;
   }
 
   Widget _buildPauseOverlay() {
