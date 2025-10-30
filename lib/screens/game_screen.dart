@@ -5,6 +5,7 @@ import '../models/difficulty.dart';
 import '../widgets/num_key.dart';
 import 'dart:async'; // <-- add this for Timer
 import 'dart:ui'; // for ImageFilter.blur
+import '../services/game_persistence.dart';
 
 class GameScreen extends StatefulWidget {
   final Difficulty startDifficulty;
@@ -24,11 +25,16 @@ class _GameScreenState extends State<GameScreen> {
   int elapsed = 0; // seconds
   int mistakes = 0; // counts wrong placements
   bool _paused = false; // pause/resume flag
+  int _lastSavedElapsed = -1; // throttle periodic autosaves
 
   // NEW: notes mode switch
   bool notesMode = false;
   // Highlight same-number taps
   int? highlightedNumber;
+  // Pressed states for action buttons
+  bool _undoPressed = false;
+  bool _erasePressed = false;
+  bool _notesPressed = false;
   // Track if a modal dialog is open to suppress pause overlay
   bool _modalOpen = false;
 
@@ -41,7 +47,10 @@ class _GameScreenState extends State<GameScreen> {
   void initState() {
     super.initState();
     model = SudokuModel()..loadRandom(widget.startDifficulty);
-    _startTimer(); // <-- start ticking once model exists
+    _startTimer(); // start ticking once model exists
+
+    // Try loading a previously saved game for this difficulty
+    _tryLoadSaved();
 
     // Check for win after every setState
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkWin());
@@ -49,8 +58,25 @@ class _GameScreenState extends State<GameScreen> {
 
   @override
   void dispose() {
-    _ticker?.cancel(); // <-- stop the timer
+    _ticker?.cancel(); // stop the timer
+    // Persist on exit so user can resume
+    _persist();
     super.dispose();
+  }
+
+  Future<void> _tryLoadSaved() async {
+    final loaded = await GamePersistence.load(widget.startDifficulty);
+    if (loaded == null) return;
+    if (!mounted) return;
+    setState(() {
+      model = loaded.model;
+      elapsed = loaded.elapsedSeconds;
+      // keep other UI state as-is
+    });
+  }
+
+  Future<void> _persist() async {
+    await GamePersistence.save(model, elapsedSeconds: elapsed);
   }
 
   void _newGame() {
@@ -66,6 +92,32 @@ class _GameScreenState extends State<GameScreen> {
     _undoNotesHistory.clear();
     _undoScoreHistory.clear();
     setState(() {});
+    // Save the new fresh game state
+    _persist();
+  }
+
+  // Reset the current puzzle to its initial state (same puzzle)
+  void _resetCurrentPuzzle() {
+    // Restore the board to the original initial grid
+    for (var r = 0; r < 9; r++) {
+      for (var c = 0; c < 9; c++) {
+        model.board[r][c] = model.initial[r][c];
+        model.notes[r][c].clear();
+      }
+    }
+    selectedRow = null;
+    selectedCol = null;
+    highlightedNumber = null;
+    mistakes = 0;
+    elapsed = 0;
+    score = 0;
+    _undoHistory.clear();
+    _undoNotesHistory.clear();
+    _undoScoreHistory.clear();
+    _paused = false;
+    _startTimer();
+    setState(() {});
+    _persist();
   }
 
   void _saveState() {
@@ -144,6 +196,7 @@ class _GameScreenState extends State<GameScreen> {
       _saveState(); // Save before modifying
       model.toggleNote(r, c, valueOrNumber);
       setState(() {}); // (no scoring for notes in Option A)
+      _persist();
       return;
     }
 
@@ -182,14 +235,21 @@ class _GameScreenState extends State<GameScreen> {
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(14),
                 ),
-                title: const Text('Game over'),
-                content: const Text(
-                  'You made three mistakes. Do you want to start a new game?',
-                ),
+                title: const Text('You ran out of chances!'),
+                content: const Text('Select an option:'),
                 actions: [
                   TextButton(
                     onPressed: () {
-                      // Close modal state before navigating
+                      // Try again: same puzzle
+                      if (mounted) setState(() => _modalOpen = false);
+                      Navigator.pop(ctx); // close dialog
+                      _resetCurrentPuzzle();
+                    },
+                    child: const Text('Try Again'),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      // New game: new random in same difficulty
                       if (mounted) setState(() => _modalOpen = false);
                       Navigator.pop(ctx); // close dialog
                       _newGame();
@@ -225,6 +285,7 @@ class _GameScreenState extends State<GameScreen> {
 
     Future.microtask(() => _checkWin());
     setState(() {});
+    _persist();
   }
 
   void _erase() {
@@ -240,6 +301,7 @@ class _GameScreenState extends State<GameScreen> {
       highlightedNumber = null;
     }
     setState(() {});
+    _persist();
   }
 
   void _startTimer() {
@@ -247,6 +309,11 @@ class _GameScreenState extends State<GameScreen> {
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!_paused) {
         setState(() => elapsed++);
+        // Throttled autosave every 5 seconds
+        if (elapsed % 5 == 0 && _lastSavedElapsed != elapsed) {
+          _lastSavedElapsed = elapsed;
+          _persist();
+        }
       }
     });
   }
@@ -255,6 +322,7 @@ class _GameScreenState extends State<GameScreen> {
     // stop the periodic ticker to fully suspend time updates
     _ticker?.cancel();
     setState(() => _paused = true);
+    _persist();
   }
 
   void _resumeTimer() {
@@ -266,6 +334,8 @@ class _GameScreenState extends State<GameScreen> {
   void _checkWin() {
     if (model.isComplete && !_paused) {
       _pauseTimer(); // pause timer when won
+      // Clear saved progress for this difficulty upon completion
+      GamePersistence.clear(model.currentDifficulty);
       if (mounted) setState(() => _modalOpen = true);
       showGeneralDialog(
         context: context,
@@ -510,26 +580,57 @@ class _GameScreenState extends State<GameScreen> {
                       ),
                     ),
                   ),
-                  const SizedBox(
-                    height: 50,
-                  ), // Increased space between board and actions
-                  // --- Actions (unchanged) ---
+                  const SizedBox(height: 40), // Space between board and actions
+                  // --- Actions ---
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 18.0),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
+                        // Undo
                         Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             GestureDetector(
-                              onTap: _undoHistory.isEmpty ? null : _undo,
-                              child: Icon(
-                                Icons.undo_rounded,
-                                size: 32,
-                                color: _undoHistory.isEmpty
-                                    ? AppColors.muted.withOpacity(0.3)
-                                    : AppColors.muted,
+                              onTapDown: _undoHistory.isEmpty
+                                  ? null
+                                  : (_) => setState(() => _undoPressed = true),
+                              onTapCancel: _undoHistory.isEmpty
+                                  ? null
+                                  : () => setState(() => _undoPressed = false),
+                              onTap: _undoHistory.isEmpty
+                                  ? null
+                                  : () {
+                                      setState(() => _undoPressed = false);
+                                      _undo();
+                                    },
+                              child: AnimatedScale(
+                                scale: _undoPressed ? 0.92 : 1.0,
+                                duration: const Duration(milliseconds: 90),
+                                curve: Curves.easeOut,
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 90),
+                                  curve: Curves.easeOut,
+                                  decoration: BoxDecoration(
+                                    boxShadow: _undoPressed
+                                        ? [
+                                            BoxShadow(
+                                              color: AppColors.neonCyan
+                                                  .withOpacity(0.45),
+                                              blurRadius: 16,
+                                              spreadRadius: 2,
+                                            ),
+                                          ]
+                                        : [],
+                                  ),
+                                  child: Icon(
+                                    Icons.undo_rounded,
+                                    size: 32,
+                                    color: _undoHistory.isEmpty
+                                        ? AppColors.muted.withOpacity(0.3)
+                                        : AppColors.muted,
+                                  ),
+                                ),
                               ),
                             ),
                             const SizedBox(height: 4),
@@ -546,19 +647,48 @@ class _GameScreenState extends State<GameScreen> {
                           ],
                         ),
                         const SizedBox(width: 40),
+                        // Erase
                         Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             GestureDetector(
-                              onTap: _erase,
-                              child: Icon(
-                                Icons.auto_fix_high_rounded,
-                                size: 32,
-                                color: AppColors.muted,
+                              onTapDown: (_) =>
+                                  setState(() => _erasePressed = true),
+                              onTapCancel: () =>
+                                  setState(() => _erasePressed = false),
+                              onTap: () {
+                                setState(() => _erasePressed = false);
+                                _erase();
+                              },
+                              child: AnimatedScale(
+                                scale: _erasePressed ? 0.92 : 1.0,
+                                duration: const Duration(milliseconds: 90),
+                                curve: Curves.easeOut,
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 90),
+                                  curve: Curves.easeOut,
+                                  decoration: BoxDecoration(
+                                    boxShadow: _erasePressed
+                                        ? [
+                                            BoxShadow(
+                                              color: AppColors.neonPink
+                                                  .withOpacity(0.45),
+                                              blurRadius: 16,
+                                              spreadRadius: 2,
+                                            ),
+                                          ]
+                                        : [],
+                                  ),
+                                  child: Icon(
+                                    Icons.auto_fix_high_rounded,
+                                    size: 32,
+                                    color: AppColors.muted,
+                                  ),
+                                ),
                               ),
                             ),
                             const SizedBox(height: 4),
-                            Text(
+                            const Text(
                               'Erase',
                               style: TextStyle(
                                 fontSize: 11,
@@ -569,20 +699,50 @@ class _GameScreenState extends State<GameScreen> {
                           ],
                         ),
                         const SizedBox(width: 40),
+                        // Notes
                         Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             GestureDetector(
-                              onTap: () =>
-                                  setState(() => notesMode = !notesMode),
-                              child: Icon(
-                                notesMode
-                                    ? Icons.edit
-                                    : Icons.mode_edit_outline_outlined,
-                                size: 32,
-                                color: notesMode
-                                    ? AppColors.neonCyan
-                                    : AppColors.muted,
+                              onTapDown: (_) =>
+                                  setState(() => _notesPressed = true),
+                              onTapCancel: () =>
+                                  setState(() => _notesPressed = false),
+                              onTap: () {
+                                setState(() {
+                                  _notesPressed = false;
+                                  notesMode = !notesMode;
+                                });
+                              },
+                              child: AnimatedScale(
+                                scale: _notesPressed ? 0.92 : 1.0,
+                                duration: const Duration(milliseconds: 90),
+                                curve: Curves.easeOut,
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 90),
+                                  curve: Curves.easeOut,
+                                  decoration: BoxDecoration(
+                                    boxShadow: _notesPressed
+                                        ? [
+                                            BoxShadow(
+                                              color: AppColors.neonCyan
+                                                  .withOpacity(0.45),
+                                              blurRadius: 16,
+                                              spreadRadius: 2,
+                                            ),
+                                          ]
+                                        : [],
+                                  ),
+                                  child: Icon(
+                                    notesMode
+                                        ? Icons.edit
+                                        : Icons.mode_edit_outline_outlined,
+                                    size: 32,
+                                    color: notesMode
+                                        ? AppColors.neonCyan
+                                        : AppColors.muted,
+                                  ),
+                                ),
                               ),
                             ),
                             const SizedBox(height: 4),
@@ -779,10 +939,48 @@ class _GameScreenState extends State<GameScreen> {
         Color cellBg = Colors.transparent;
         final hasHighlight =
             highlightedNumber != null && !isEmpty && value == highlightedNumber;
+        // Highlight full row, column, and 3x3 block for the selected cell
+        bool inSelectedRegion = false;
+        if (selectedRow != null && selectedCol != null) {
+          final sr = selectedRow!, sc = selectedCol!;
+          final sameRow = r == sr;
+          final sameCol = c == sc;
+          final sameBlock = (r ~/ 3 == sr ~/ 3) && (c ~/ 3 == sc ~/ 3);
+          inSelectedRegion = (sameRow || sameCol || sameBlock);
+        }
+
+        // Prepare subtle glow shadows per state
+        List<BoxShadow>? cellShadows;
         if (selected) {
-          cellBg = AppColors.neonCyan.withOpacity(0.12);
+          // Selected cell stands out most (neon pink glow to match theme)
+          cellBg = AppColors.neonPink.withOpacity(0.22);
+          cellShadows = [
+            BoxShadow(
+              color: AppColors.neonPink.withOpacity(0.35),
+              blurRadius: 14,
+              spreadRadius: 1,
+            ),
+          ];
         } else if (hasHighlight) {
-          cellBg = AppColors.neonPink.withOpacity(0.16);
+          // Same-number highlight across the grid
+          cellBg = AppColors.neonPink.withOpacity(0.24);
+          cellShadows = [
+            BoxShadow(
+              color: AppColors.neonPink.withOpacity(0.30),
+              blurRadius: 12,
+              spreadRadius: 1,
+            ),
+          ];
+        } else if (inSelectedRegion) {
+          // Subtle region highlight for row/col/block
+          cellBg = AppColors.neonViolet.withOpacity(0.14);
+          cellShadows = [
+            BoxShadow(
+              color: AppColors.neonViolet.withOpacity(0.22),
+              blurRadius: 10,
+              spreadRadius: 0.5,
+            ),
+          ];
         }
 
         return GestureDetector(
@@ -791,6 +989,7 @@ class _GameScreenState extends State<GameScreen> {
           child: Container(
             decoration: BoxDecoration(
               color: cellBg,
+              boxShadow: cellShadows,
               border: Border(
                 top: top,
                 left: left,
@@ -808,7 +1007,7 @@ class _GameScreenState extends State<GameScreen> {
                         isEmpty ? '' : value.toString(),
                         style: TextStyle(
                           fontWeight: fixed ? FontWeight.w800 : FontWeight.w600,
-                          fontSize: 18,
+                          fontSize: 34,
                           letterSpacing: 0.5,
                           color: conflict
                               ? Colors.redAccent
