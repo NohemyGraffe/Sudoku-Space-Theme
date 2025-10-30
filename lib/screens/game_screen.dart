@@ -71,12 +71,13 @@ class _GameScreenState extends State<GameScreen> {
     setState(() {
       model = loaded.model;
       elapsed = loaded.elapsedSeconds;
+      score = loaded.score;
       // keep other UI state as-is
     });
   }
 
   Future<void> _persist() async {
-    await GamePersistence.save(model, elapsedSeconds: elapsed);
+    await GamePersistence.save(model, elapsedSeconds: elapsed, score: score);
   }
 
   void _newGame() {
@@ -86,6 +87,7 @@ class _GameScreenState extends State<GameScreen> {
     elapsed = 0; // <-- reset
     _paused = false; // <-- ensure running
     mistakes = 0; // reset mistakes on new game
+    score = 0; // reset score for new game
     _startTimer(); // <-- restart
     highlightedNumber = null;
     _undoHistory.clear();
@@ -184,6 +186,24 @@ class _GameScreenState extends State<GameScreen> {
     if (_paused) return; // safety: don’t score while paused
     if (selectedRow == null || selectedCol == null) return;
     final r = selectedRow!, c = selectedCol!;
+    // If the cell already has a definitive value, prevent selecting a different
+    // number at the same time. Require erase first to change it.
+    if (!notesMode && model.board[r][c] != 0 && valueOrNumber != null) {
+      if (model.board[r][c] == valueOrNumber) {
+        // Same number tapped as already in the cell: no-op
+        return;
+      }
+      // Replace any current snackbar so they don't queue up.
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Erase first to change this cell.'),
+          duration: Duration(milliseconds: 900),
+        ),
+      );
+      return;
+    }
 
     if (notesMode) {
       if (valueOrNumber == null) return;
@@ -275,6 +295,8 @@ class _GameScreenState extends State<GameScreen> {
         // Formula: 20 + (9 - candidateCount) * 5  → ranges ~25..60
         final gain = 20 + (9 - candBefore) * 5;
         score = ((score + gain).clamp(0, 999999)).toInt();
+        // Add to all-time total points (fire-and-forget)
+        GamePersistence.addToTotal(gain);
 
         // (Optional) quick feedback:
         // ScaffoldMessenger.of(context).showSnackBar(

@@ -1,8 +1,14 @@
 import 'package:flutter/material.dart';
 import 'theme/app_theme.dart';
 import 'screens/home_screen.dart';
+import 'services/game_persistence.dart';
 
-void main() => runApp(const SudokuApp());
+Future<void> main() async {
+  // Ensure bindings are ready before async init.
+  WidgetsFlutterBinding.ensureInitialized();
+  await GamePersistence.init();
+  runApp(const SudokuApp());
+}
 
 class SudokuApp extends StatelessWidget {
   const SudokuApp({super.key});

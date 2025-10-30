@@ -26,16 +26,17 @@ class _NumKeyState extends State<NumKey> {
 
     final borderRadius = BorderRadius.circular(widget.size * 0.2);
     return AnimatedScale(
-      scale: _pressed ? 0.96 : 1.0,
-      duration: const Duration(milliseconds: 80),
-      curve: Curves.easeOut,
+      // Make key significantly larger while pressed for a strong feedback effect
+      scale: _pressed ? 1.28 : 1.0,
+      duration: const Duration(milliseconds: 110),
+      curve: Curves.easeOutBack,
       child: InkWell(
         onTap: widget.onTap,
         onHighlightChanged: (v) => setState(() => _pressed = v),
         borderRadius: borderRadius,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 80),
-          curve: Curves.easeOut,
+          duration: const Duration(milliseconds: 110),
+          curve: Curves.easeOutCubic,
           // Make keys taller than wide for a more elongated look
           width: widget.size,
           height: widget.size * 1.792, // 20% reduction from 2.24x
@@ -48,16 +49,16 @@ class _NumKeyState extends State<NumKey> {
             ),
             boxShadow: [
               BoxShadow(
-                color: scheme.secondary.withOpacity(_pressed ? 0.12 : 0.22),
-                blurRadius: _pressed ? 8 : 18,
-                spreadRadius: _pressed ? 1 : 2,
-                offset: _pressed ? const Offset(0, 1) : const Offset(0, 3),
+                color: scheme.secondary.withOpacity(_pressed ? 0.30 : 0.20),
+                blurRadius: _pressed ? 28 : 16,
+                spreadRadius: _pressed ? 6 : 2,
+                offset: _pressed ? const Offset(0, 8) : const Offset(0, 3),
               ),
               if (_pressed)
                 BoxShadow(
                   color: AppColors.neonPink.withOpacity(0.55),
-                  blurRadius: 22,
-                  spreadRadius: 2,
+                  blurRadius: 34,
+                  spreadRadius: 4,
                 ),
             ],
           ),

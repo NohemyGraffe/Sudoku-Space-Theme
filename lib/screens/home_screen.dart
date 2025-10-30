@@ -57,9 +57,22 @@ class HomeScreen extends StatelessWidget {
             children: [
               const SizedBox(height: 6),
               const _Header(),
+              const SizedBox(height: 6),
+              const _TotalPoints(),
               const SizedBox(height: 8),
-              const _SavedStrip(),
+              // Continue strip removed per request
               const SizedBox(height: 8),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12.0),
+                child: Text(
+                  'Pick a difficulty level and vibe',
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: Colors.white70, letterSpacing: 0.2),
+                ),
+              ),
+              const SizedBox(height: 6),
               Expanded(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
@@ -77,23 +90,83 @@ class HomeScreen extends StatelessWidget {
                         future: GamePersistence.hasSaved(d),
                         builder: (context, snap) {
                           final hasSaved = snap.data == true;
-                          final label = hasSaved
-                              ? 'Continue ${difficultyLabel(d)}'
-                              : difficultyLabel(d);
+                          // Always show only the difficulty name, even if a save exists.
+                          final label = difficultyLabel(d);
                           return _DifficultyCard(
                             label: label,
                             subtitle: _subtitleFor(d, hasSaved),
                             icon: _iconFor(d),
                             accent: _colorFor(d),
                             compact: isShort, // <— shrink content if needed
-                            onTap: () {
+                            onTap: () async {
                               HapticFeedback.lightImpact();
-                              Navigator.of(context).push(
+                              final nav = Navigator.of(context);
+                              final exists = await GamePersistence.hasSaved(d);
+                              if (exists) {
+                                final choice = await showDialog<int>(
+                                  context: context,
+                                  builder: (ctx) => AlertDialog(
+                                    backgroundColor: AppColors.card,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                    title: const Text('Continue game?'),
+                                    content: Text(
+                                      'A saved ${difficultyLabel(d)} game was found. What would you like to do?',
+                                      style: const TextStyle(
+                                        color: Colors.white70,
+                                      ),
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () => Navigator.pop(ctx, 0),
+                                        child: const Text('Cancel'),
+                                      ),
+                                      TextButton(
+                                        onPressed: () => Navigator.pop(ctx, 2),
+                                        child: const Text('New Game'),
+                                      ),
+                                      TextButton(
+                                        onPressed: () => Navigator.pop(ctx, 1),
+                                        child: const Text('Resume'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                                if (choice == 1) {
+                                  await nav.push(
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          GameScreen(startDifficulty: d),
+                                    ),
+                                  );
+                                  if (!context.mounted) return;
+                                  (context as Element).markNeedsBuild();
+                                  return;
+                                } else if (choice == 2) {
+                                  await GamePersistence.clear(d);
+                                  await nav.push(
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          GameScreen(startDifficulty: d),
+                                    ),
+                                  );
+                                  if (!context.mounted) return;
+                                  (context as Element).markNeedsBuild();
+                                  return;
+                                } else {
+                                  return; // canceled
+                                }
+                              }
+
+                              await nav.push(
                                 MaterialPageRoute(
                                   builder: (_) =>
                                       GameScreen(startDifficulty: d),
                                 ),
                               );
+                              if (!context.mounted) return;
+                              (context as Element).markNeedsBuild();
                             },
                           );
                         },
@@ -111,6 +184,45 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
+class _TotalPoints extends StatelessWidget {
+  const _TotalPoints();
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: GamePersistence.totalPointsNotifier,
+      builder: (context, total, _) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: AppColors.neonCyan.withOpacity(0.25)),
+              color: AppColors.card.withOpacity(0.30),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.stars_rounded, color: AppColors.neonLime),
+                const SizedBox(width: 8),
+                Text(
+                  'Total points: $total',
+                  style: const TextStyle(
+                    color: AppColors.neonCyan,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _Header extends StatelessWidget {
   const _Header();
 
@@ -120,192 +232,12 @@ class _Header extends StatelessWidget {
       children: [
         _NeonTitle(text: 'Sudoku - Neon Edition'),
         SizedBox(height: 6),
-        Text(
-          'Pick your vibe • Continue where you left off',
-          style: TextStyle(color: Colors.white70, letterSpacing: 0.2),
-          textAlign: TextAlign.center,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
       ],
     );
   }
 }
 
-class _SavedStrip extends StatelessWidget {
-  const _SavedStrip();
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<List<Difficulty>>(
-      future: GamePersistence.listSaved(),
-      builder: (context, snap) {
-        final list = snap.data ?? const <Difficulty>[];
-        if (list.isEmpty) return const SizedBox.shrink();
-
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.white.withOpacity(0.10)),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  AppColors.card.withOpacity(0.55),
-                  AppColors.card.withOpacity(0.35),
-                ],
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.neonCyan.withOpacity(0.12),
-                  blurRadius: 16,
-                  offset: const Offset(0, 6),
-                ),
-              ],
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(14),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-                  child: Wrap(
-                    alignment: WrapAlignment.start,
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final d in list)
-                        _SavedChip(
-                          difficulty: d,
-                          onResume: () {
-                            HapticFeedback.selectionClick();
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => GameScreen(startDifficulty: d),
-                              ),
-                            );
-                          },
-                          onClear: () async {
-                            HapticFeedback.lightImpact();
-                            final ok =
-                                await showDialog<bool>(
-                                  context: context,
-                                  builder: (ctx) => AlertDialog(
-                                    backgroundColor: AppColors.card,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                    title: const Text('Delete saved game?'),
-                                    content: Text(
-                                      'Remove ${difficultyLabel(d)} progress.',
-                                      style: const TextStyle(
-                                        color: Colors.white70,
-                                      ),
-                                    ),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () =>
-                                            Navigator.pop(ctx, false),
-                                        child: const Text('Cancel'),
-                                      ),
-                                      TextButton(
-                                        onPressed: () =>
-                                            Navigator.pop(ctx, true),
-                                        child: const Text('Delete'),
-                                      ),
-                                    ],
-                                  ),
-                                ) ??
-                                false;
-                            if (ok) {
-                              await GamePersistence.clear(d);
-                              (context as Element).markNeedsBuild();
-                            }
-                          },
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _SavedChip extends StatelessWidget {
-  final Difficulty difficulty;
-  final VoidCallback onResume;
-  final VoidCallback onClear;
-
-  const _SavedChip({
-    super.key,
-    required this.difficulty,
-    required this.onResume,
-    required this.onClear,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final color = _colorFor(difficulty);
-    return GestureDetector(
-      onLongPress: onClear,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: color.withOpacity(0.55), width: 1.1),
-          boxShadow: [
-            BoxShadow(
-              color: color.withOpacity(0.18),
-              blurRadius: 14,
-              offset: const Offset(0, 4),
-            ),
-          ],
-          gradient: LinearGradient(
-            colors: [
-              AppColors.card.withOpacity(0.60),
-              AppColors.card.withOpacity(0.38),
-            ],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
-        child: InkWell(
-          onTap: onResume,
-          borderRadius: BorderRadius.circular(20),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(_iconFor(difficulty), size: 18, color: color),
-              const SizedBox(width: 8),
-              const Text(
-                'Continue',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: AppColors.neonCyan,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0.2,
-                ),
-              ),
-              const SizedBox(width: 6),
-              const Icon(
-                Icons.play_arrow_rounded,
-                size: 18,
-                color: Colors.white70,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
+// Saved strip and Continue chips removed per request.
 
 class _NeonTitle extends StatelessWidget {
   final String text;
@@ -343,14 +275,14 @@ class _DifficultyCard extends StatefulWidget {
   final VoidCallback onTap;
 
   const _DifficultyCard({
-    super.key,
+    Key? key,
     required this.label,
     required this.subtitle,
     required this.icon,
     required this.accent,
     required this.onTap,
     this.compact = false,
-  });
+  }) : super(key: key);
 
   @override
   State<_DifficultyCard> createState() => _DifficultyCardState();
@@ -528,7 +460,6 @@ Color _colorFor(Difficulty d) {
 }
 
 String _subtitleFor(Difficulty d, bool hasSaved) {
-  if (hasSaved) return 'Pick up where you left off';
   switch (d) {
     case Difficulty.easy:
       return 'Warm up';
