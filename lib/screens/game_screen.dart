@@ -850,14 +850,10 @@ class _GameScreenState extends State<GameScreen> {
                       builder: (context, constraints) {
                         final available = constraints.maxWidth;
 
-                        // Determine which numbers are still available (not fully placed yet).
+                        // Always render all 1..9 keys; completed ones will be disabled/grayed.
                         final allNums = List<int>.generate(9, (i) => i + 1);
                         final completed = _completedNumbers();
-                        final nums = [
-                          for (final n in allNums)
-                            if (!completed.contains(n)) n,
-                        ];
-                        final keys = nums.length;
+                        final keys = allNums.length;
 
                         // Try progressively smaller spacings so keys can fit without scrolling.
                         // Make spacing tighter so keys are visually closer together.
@@ -900,13 +896,14 @@ class _GameScreenState extends State<GameScreen> {
                         return Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            for (int i = 0; i < nums.length; i++) ...[
+                            for (int i = 0; i < allNums.length; i++) ...[
                               NumKey(
                                 size: keySize,
-                                label: '${nums[i]}',
-                                onTap: () => _onInput(nums[i]),
+                                label: '${allNums[i]}',
+                                enabled: !completed.contains(allNums[i]),
+                                onTap: () => _onInput(allNums[i]),
                               ),
-                              if (i != nums.length - 1)
+                              if (i != allNums.length - 1)
                                 SizedBox(width: chosenSpacing),
                             ],
                           ],

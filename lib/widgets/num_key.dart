@@ -6,11 +6,13 @@ class NumKey extends StatefulWidget {
   final VoidCallback onTap;
   // size in logical pixels (width & height). Default kept for backward compatibility.
   final double size;
+  final bool enabled;
   const NumKey({
     super.key,
     required this.label,
     required this.onTap,
     this.size = 52,
+    this.enabled = true,
   });
 
   @override
@@ -27,12 +29,15 @@ class _NumKeyState extends State<NumKey> {
     final borderRadius = BorderRadius.circular(widget.size * 0.2);
     return AnimatedScale(
       // Make key significantly larger while pressed for a strong feedback effect
-      scale: _pressed ? 1.28 : 1.0,
+      scale: (widget.enabled && _pressed) ? 1.28 : 1.0,
       duration: const Duration(milliseconds: 110),
       curve: Curves.easeOutBack,
       child: InkWell(
-        onTap: widget.onTap,
-        onHighlightChanged: (v) => setState(() => _pressed = v),
+        onTap: widget.enabled ? widget.onTap : null,
+        onHighlightChanged: (v) {
+          if (!widget.enabled) return;
+          setState(() => _pressed = v);
+        },
         borderRadius: borderRadius,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 110),
@@ -44,29 +49,35 @@ class _NumKeyState extends State<NumKey> {
             color: scheme.surface,
             borderRadius: borderRadius,
             border: Border.all(
-              color: scheme.primary.withOpacity(_pressed ? 0.8 : 0.65),
+              color: widget.enabled
+                  ? scheme.primary.withOpacity(_pressed ? 0.8 : 0.65)
+                  : AppColors.muted.withOpacity(0.25),
               width: 1.5,
             ),
             boxShadow: [
-              BoxShadow(
-                color: scheme.secondary.withOpacity(_pressed ? 0.30 : 0.20),
-                blurRadius: _pressed ? 28 : 16,
-                spreadRadius: _pressed ? 6 : 2,
-                offset: _pressed ? const Offset(0, 8) : const Offset(0, 3),
-              ),
-              if (_pressed)
+              if (widget.enabled) ...[
                 BoxShadow(
-                  color: AppColors.neonPink.withOpacity(0.55),
-                  blurRadius: 34,
-                  spreadRadius: 4,
+                  color: scheme.secondary.withOpacity(_pressed ? 0.30 : 0.20),
+                  blurRadius: _pressed ? 28 : 16,
+                  spreadRadius: _pressed ? 6 : 2,
+                  offset: _pressed ? const Offset(0, 8) : const Offset(0, 3),
                 ),
+                if (_pressed)
+                  BoxShadow(
+                    color: AppColors.neonPink.withOpacity(0.55),
+                    blurRadius: 34,
+                    spreadRadius: 4,
+                  ),
+              ],
             ],
           ),
           child: Center(
             child: Text(
               widget.label,
               style: TextStyle(
-                color: scheme.secondary,
+                color: widget.enabled
+                    ? scheme.secondary
+                    : AppColors.muted.withOpacity(0.45),
                 fontWeight: FontWeight.w800,
                 // scale font size with key size - increased for better readability
                 fontSize: (widget.size * 0.765).clamp(
