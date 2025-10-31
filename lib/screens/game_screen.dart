@@ -915,10 +915,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                           // Determine which numbers are still available (not fully placed yet).
                           final allNums = List<int>.generate(9, (i) => i + 1);
                           final completed = _completedNumbers();
-                          final nums = [
-                            for (final n in allNums)
-                              if (!completed.contains(n)) n,
-                          ];
+                          // Show all numbers 1..9, but disable keys that are completed
+                          final nums = allNums;
                           final keys = nums.length;
 
                           // Try progressively smaller spacings so keys can fit without scrolling.
@@ -966,6 +964,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                 NumKey(
                                   size: keySize,
                                   label: '${nums[i]}',
+                                  enabled: !completed.contains(nums[i]),
                                   onTap: () => _onInput(nums[i]),
                                 ),
                                 if (i != nums.length - 1)
