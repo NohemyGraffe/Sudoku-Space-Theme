@@ -5,27 +5,40 @@ import '../models/difficulty.dart';
 import 'game_screen.dart';
 import '../theme/app_theme.dart';
 import '../services/game_persistence.dart';
+import '../models/sudoku_board.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final items = [
-      Difficulty.easy,
-      Difficulty.medium,
-      Difficulty.hard,
-      Difficulty.expert,
-    ];
+  State<HomeScreen> createState() => _HomeScreenState();
+}
 
+class _HomeScreenState extends State<HomeScreen> {
+  LoadedResume? _resume;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadResume();
+  }
+
+  Future<void> _loadResume() async {
+    final r = await GamePersistence.loadResume();
+    if (!mounted) return;
+    setState(() {
+      _resume = r;
+      _loading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final isShort = size.height < 720; // phones with less vertical space
-    final isVeryShort = size.height < 640; // even tighter (small/landscape)
-
-    // Make items relatively taller on short screens by lowering the aspect ratio.
-    final gridAspect = isVeryShort ? 0.75 : (isShort ? 0.85 : 1.0);
-
     return Scaffold(
+      backgroundColor: AppColors.bg,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         elevation: 0,
@@ -44,149 +57,198 @@ class HomeScreen extends StatelessWidget {
           child: const Text('', style: TextStyle(fontWeight: FontWeight.w900)),
         ),
       ),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(-0.4, -0.9),
-            radius: 1.2,
-            colors: [Color(0x3315FFE0), AppColors.bg],
-          ),
-        ),
-        child: SafeArea(
-          child: Column(
-            children: [
-              const SizedBox(height: 6),
-              const _Header(),
-              const SizedBox(height: 6),
-              const _TotalPoints(),
-              const SizedBox(height: 8),
-              // Continue strip removed per request
-              const SizedBox(height: 8),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 12.0),
-                child: Text(
-                  'Pick a difficulty level and vibe',
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: Colors.white70, letterSpacing: 0.2),
+      body: Stack(
+        children: [
+          // Background: deep violet -> near black
+          Positioned.fill(
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFF130F1A), AppColors.bg],
                 ),
               ),
-              const SizedBox(height: 6),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
-                  child: GridView.builder(
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 2,
-                      crossAxisSpacing: 14,
-                      mainAxisSpacing: 14,
-                      childAspectRatio: gridAspect,
-                    ),
-                    itemCount: items.length,
-                    itemBuilder: (_, i) {
-                      final d = items[i];
-                      return FutureBuilder<bool>(
-                        future: GamePersistence.hasSaved(d),
-                        builder: (context, snap) {
-                          final hasSaved = snap.data == true;
-                          // Always show only the difficulty name, even if a save exists.
-                          final label = difficultyLabel(d);
-                          return _DifficultyCard(
-                            label: label,
-                            subtitle: _subtitleFor(d, hasSaved),
-                            icon: _iconFor(d),
-                            accent: _colorFor(d),
-                            compact: isShort, // <— shrink content if needed
-                            onTap: () async {
-                              HapticFeedback.lightImpact();
-                              final nav = Navigator.of(context);
-                              final exists = await GamePersistence.hasSaved(d);
-                              if (exists) {
-                                final choice = await showDialog<int>(
-                                  context: context,
-                                  builder: (ctx) => AlertDialog(
-                                    backgroundColor: AppColors.card,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                    title: const Text('Continue game?'),
-                                    content: Text(
-                                      'A saved ${difficultyLabel(d)} game was found. What would you like to do?',
-                                      style: const TextStyle(
-                                        color: Colors.white70,
-                                      ),
-                                    ),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () => Navigator.pop(ctx, 0),
-                                        child: const Text('Cancel'),
-                                      ),
-                                      TextButton(
-                                        onPressed: () => Navigator.pop(ctx, 2),
-                                        child: const Text('New Game'),
-                                      ),
-                                      TextButton(
-                                        onPressed: () => Navigator.pop(ctx, 1),
-                                        child: const Text('Resume'),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                                if (choice == 1) {
-                                  await nav.push(
-                                    MaterialPageRoute(
-                                      builder: (_) =>
-                                          GameScreen(startDifficulty: d),
-                                    ),
-                                  );
-                                  if (!context.mounted) return;
-                                  (context as Element).markNeedsBuild();
-                                  return;
-                                } else if (choice == 2) {
-                                  await GamePersistence.clear(d);
-                                  await nav.push(
-                                    MaterialPageRoute(
-                                      builder: (_) =>
-                                          GameScreen(startDifficulty: d),
-                                    ),
-                                  );
-                                  if (!context.mounted) return;
-                                  (context as Element).markNeedsBuild();
-                                  return;
-                                } else {
-                                  return; // canceled
-                                }
-                              }
+            ),
+          ),
+          // Corner glows to match board neon
+          Positioned(
+            top: -80,
+            left: -60,
+            child: _CornerGlow(
+              color: AppColors.neonPink.withOpacity(0.25),
+              size: 220,
+            ),
+          ),
+          Positioned(
+            bottom: -90,
+            right: -70,
+            child: _CornerGlow(
+              color: AppColors.neonCyan.withOpacity(0.22),
+              size: 260,
+            ),
+          ),
 
-                              await nav.push(
-                                MaterialPageRoute(
-                                  builder: (_) =>
-                                      GameScreen(startDifficulty: d),
-                                ),
-                              );
-                              if (!context.mounted) return;
-                              (context as Element).markNeedsBuild();
-                            },
-                          );
-                        },
-                      );
-                    },
-                  ),
-                ),
-              ),
-              const _Footer(),
-            ],
+          SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return Column(
+                  children: [
+                    const SizedBox(height: 8), // tighter top padding
+                    const _Header(),
+                    const SizedBox(height: 30),
+                    const _AllTimeScoreBanner(),
+                    const SizedBox(height: 45),
+
+                    // ============== Two primary actions ==============
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          SizedBox(
+                            width: 270,
+                            child: _NeonContinueButton(
+                              enabled: !_loading && _resume != null,
+                              subtitle: _resume == null
+                                  ? 'No saved game'
+                                  : '${difficultyLabel(_resume!.difficulty).toUpperCase()} • ${formatElapsed(_resume!.elapsedSeconds)}',
+                              onTap: () async {
+                                HapticFeedback.lightImpact();
+                                final snap = await GamePersistence.loadResume();
+                                if (snap == null) return; // nothing to resume
+                                final nav = Navigator.of(context);
+                                nav
+                                    .push(
+                                      MaterialPageRoute(
+                                        builder: (_) => GameScreen(
+                                          initialModel: snap.model,
+                                          initialElapsed: snap.elapsedSeconds,
+                                          initialScore: snap.score,
+                                          initialMistakes: snap.mistakes,
+                                        ),
+                                      ),
+                                    )
+                                    .then((_) {
+                                      if (mounted) _loadResume();
+                                    });
+                              },
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          SizedBox(
+                            width: 270,
+                            child: _NeonNewGameButton(
+                              onTap: () =>
+                                  _openNewGamePicker(context, compact: isShort),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    const Spacer(),
+                    const SizedBox(height: 0),
+                    const _Footer(),
+                  ],
+                );
+              },
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
+
+  Future<void> _openNewGamePicker(
+    BuildContext context, {
+    required bool compact,
+  }) async {
+    final choice = await showModalBottomSheet<Difficulty>(
+      context: context,
+      backgroundColor: AppColors.card,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Choose Difficulty',
+                style: TextStyle(
+                  color: AppColors.neonCyan,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 6),
+              for (final d in Difficulty.values)
+                ListTile(
+                  leading: Icon(_iconFor(d), color: _colorFor(d)),
+                  title: Text(
+                    difficultyLabel(d),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  onTap: () => Navigator.pop(ctx, d),
+                ),
+              const SizedBox(height: 6),
+            ],
+          ),
+        );
+      },
+    );
+    if (choice == null) return;
+
+    // Create a fresh model for the chosen difficulty
+    final model = SudokuModel()..loadRandom(choice);
+    // Immediately persist to the global resume slot
+    await GamePersistence.saveResume(
+      model,
+      elapsedSeconds: 0,
+      score: 0,
+      mistakes: 0,
+      lastSavedAt: DateTime.now(),
+    );
+
+    if (!mounted) return;
+    final nav = Navigator.of(context);
+    nav
+        .push(
+          MaterialPageRoute(
+            builder: (_) => GameScreen(
+              initialModel: model,
+              initialElapsed: 0,
+              initialScore: 0,
+              initialMistakes: 0,
+            ),
+          ),
+        )
+        .then((_) {
+          if (mounted) _loadResume();
+        });
+  }
 }
 
-class _TotalPoints extends StatelessWidget {
-  const _TotalPoints();
+class _AllTimeScoreBanner extends StatefulWidget {
+  const _AllTimeScoreBanner();
 
+  @override
+  State<_AllTimeScoreBanner> createState() => _AllTimeScoreBannerState();
+}
+
+class _AllTimeScoreBannerState extends State<_AllTimeScoreBanner> {
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<int>(
@@ -194,24 +256,78 @@ class _TotalPoints extends StatelessWidget {
       builder: (context, total, _) {
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 450),
+            curve: Curves.easeOut,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: AppColors.neonCyan.withOpacity(0.25)),
-              color: AppColors.card.withOpacity(0.30),
+              color: AppColors.card.withOpacity(0.46),
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(
+                color: AppColors.neonLime.withOpacity(0.45),
+                width: 1.6,
+              ),
             ),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                const Icon(Icons.stars_rounded, color: AppColors.neonLime),
-                const SizedBox(width: 8),
-                Text(
-                  'Total points: $total',
-                  style: const TextStyle(
-                    color: AppColors.neonCyan,
-                    fontWeight: FontWeight.w800,
+                // Big neon trophy
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: AppColors.card.withOpacity(0.35),
+                    border: Border.all(
+                      color: AppColors.neonLime.withOpacity(0.55),
+                      width: 1,
+                    ),
+                  ),
+                  child: Center(
+                    child: const Icon(
+                      Icons.emoji_events_rounded,
+                      color: AppColors.neonLime,
+                      size: 26,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                const Text(
+                  'All-Time Score',
+                  style: TextStyle(
+                    color: AppColors.neonLime,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
                     letterSpacing: 0.2,
+                  ),
+                ),
+                const Spacer(),
+                // Neon capsule with total (bigger)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(999),
+                    color: AppColors.neonLime,
+                  ),
+                  child: TweenAnimationBuilder<double>(
+                    key: ValueKey(total),
+                    tween: Tween(begin: 0.9, end: 1.0),
+                    duration: const Duration(milliseconds: 280),
+                    builder: (context, scale, child) {
+                      return Transform.scale(scale: scale, child: child);
+                    },
+                    child: Text(
+                      '$total',
+                      style: const TextStyle(
+                        color: Colors.black,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 18,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -228,12 +344,7 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Column(
-      children: [
-        _NeonTitle(text: 'Sudoku - Neon Edition'),
-        SizedBox(height: 6),
-      ],
-    );
+    return const _NeonTitle(text: 'Sudoku - Neon Edition');
   }
 }
 
@@ -245,161 +356,27 @@ class _NeonTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ShaderMask(
-      shaderCallback: (rect) => const LinearGradient(
-        colors: [AppColors.neonPink, AppColors.neonViolet, AppColors.neonLime],
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-      ).createShader(rect),
-      child: Text(
-        text,
-        textAlign: TextAlign.center,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(
-          fontSize: 26,
-          fontWeight: FontWeight.w900,
-          letterSpacing: 0.2,
-        ),
-      ),
-    );
-  }
-}
-
-class _DifficultyCard extends StatefulWidget {
-  final String label;
-  final String subtitle;
-  final IconData icon;
-  final Color accent;
-  final bool compact;
-  final VoidCallback onTap;
-
-  const _DifficultyCard({
-    Key? key,
-    required this.label,
-    required this.subtitle,
-    required this.icon,
-    required this.accent,
-    required this.onTap,
-    this.compact = false,
-  }) : super(key: key);
-
-  @override
-  State<_DifficultyCard> createState() => _DifficultyCardState();
-}
-
-class _DifficultyCardState extends State<_DifficultyCard> {
-  bool _pressed = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final iconSize = widget.compact ? 36.0 : 42.0;
-    final titleSize = widget.compact ? 18.0 : 20.0;
-    final subSize = widget.compact ? 11.0 : 12.0;
-    final pad = widget.compact ? 12.0 : 16.0;
-
-    return AnimatedScale(
-      duration: const Duration(milliseconds: 110),
-      scale: _pressed ? 0.98 : 1.0,
-      child: GestureDetector(
-        onTapDown: (_) => setState(() => _pressed = true),
-        onTapCancel: () => setState(() => _pressed = false),
-        onTapUp: (_) => setState(() => _pressed = false),
-        onTap: widget.onTap,
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: widget.accent.withOpacity(0.45),
-              width: 1.1,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: widget.accent.withOpacity(0.18),
-                blurRadius: 18,
-                spreadRadius: 1.2,
-                offset: const Offset(0, 4),
-              ),
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: ShaderMask(
+        shaderCallback: (rect) => const LinearGradient(
+          colors: [AppColors.neonPink, AppColors.neonCyan],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ).createShader(rect),
+        child: Text(
+          text,
+          textAlign: TextAlign.center,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 0.25,
+            shadows: [
+              Shadow(color: AppColors.neonPink, blurRadius: 12),
+              Shadow(color: AppColors.neonCyan, blurRadius: 18),
             ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(20),
-            child: Stack(
-              children: [
-                Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        AppColors.card.withOpacity(0.58),
-                        AppColors.card.withOpacity(0.36),
-                      ],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                  ),
-                ),
-                BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                  child: const SizedBox.expand(),
-                ),
-                Padding(
-                  padding: EdgeInsets.all(pad),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment:
-                        CrossAxisAlignment.stretch, // Add this line
-                    mainAxisSize: MainAxisSize.min, // <— don’t stretch
-                    children: [
-                      Icon(widget.icon, size: iconSize, color: widget.accent),
-                      const SizedBox(height: 10),
-                      Text(
-                        widget.label,
-                        textAlign: TextAlign.center,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: AppColors.neonCyan,
-                          fontWeight: FontWeight.w900,
-                          fontSize: titleSize,
-                          letterSpacing: 0.4,
-                          shadows: const [Shadow(blurRadius: 6)],
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Opacity(
-                        opacity: 0.85,
-                        child: Text(
-                          widget.subtitle,
-                          textAlign: TextAlign.center,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: Colors.white70,
-                            fontSize: subSize,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Align(
-                  alignment: Alignment.topCenter,
-                  child: Container(
-                    height: 16,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.white.withOpacity(0.10),
-                          Colors.transparent,
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
           ),
         ),
       ),
@@ -415,7 +392,7 @@ class _Footer extends StatelessWidget {
     return Opacity(
       opacity: 0.8,
       child: Padding(
-        padding: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.only(bottom: 0),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: const [
@@ -459,15 +436,212 @@ Color _colorFor(Difficulty d) {
   }
 }
 
-String _subtitleFor(Difficulty d, bool hasSaved) {
-  switch (d) {
-    case Difficulty.easy:
-      return 'Warm up';
-    case Difficulty.medium:
-      return 'Flow state';
-    case Difficulty.hard:
-      return 'Challenge';
-    case Difficulty.expert:
-      return 'Brutal';
+String timeAgoFromIso(String? iso) {
+  if (iso == null) return 'Just now';
+  DateTime? t;
+  try {
+    t = DateTime.parse(iso).toLocal();
+  } catch (_) {
+    return 'Just now';
+  }
+  final now = DateTime.now();
+  final diff = now.difference(t);
+  if (diff.inSeconds < 10) return 'Just now';
+  if (diff.inMinutes < 1) return '${diff.inSeconds}s ago';
+  if (diff.inHours < 1) return '${diff.inMinutes} min ago';
+  if (diff.inDays < 1) return '${diff.inHours} h ago';
+  return '${diff.inDays} d ago';
+}
+
+String formatElapsed(int seconds) {
+  final m = seconds ~/ 60;
+  final s = (seconds % 60).toString().padLeft(2, '0');
+  return '$m:$s';
+}
+
+// ===== UI pieces for buttons =====
+class _NeonContinueButton extends StatefulWidget {
+  final bool enabled;
+  final String? subtitle;
+  final VoidCallback onTap;
+  const _NeonContinueButton({
+    required this.enabled,
+    required this.onTap,
+    this.subtitle,
+  });
+
+  @override
+  State<_NeonContinueButton> createState() => _NeonContinueButtonState();
+}
+
+class _NeonContinueButtonState extends State<_NeonContinueButton> {
+  bool _pressed = false;
+  @override
+  Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(16);
+    return AnimatedScale(
+      duration: const Duration(milliseconds: 90),
+      scale: _pressed ? 0.98 : 1.0,
+      child: Opacity(
+        opacity: widget.enabled ? 1.0 : 0.6,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: radius,
+            splashColor: Colors.white.withOpacity(0.18),
+            onHighlightChanged: (h) => setState(() => _pressed = h),
+            onTap: widget.enabled ? widget.onTap : null,
+            child: Ink(
+              decoration: BoxDecoration(
+                borderRadius: radius,
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF1565C0), AppColors.neonCyan],
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.neonCyan.withOpacity(0.25),
+                    blurRadius: 16,
+                    spreadRadius: 1.2,
+                  ),
+                ],
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 14,
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.play_arrow_rounded, color: Colors.black),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        'Continue',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Colors.black,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    if (widget.subtitle != null) ...[
+                      const SizedBox(width: 10),
+                      Text(
+                        widget.subtitle!,
+                        style: const TextStyle(
+                          color: Colors.black,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NeonNewGameButton extends StatefulWidget {
+  final VoidCallback onTap;
+  const _NeonNewGameButton({required this.onTap});
+
+  @override
+  State<_NeonNewGameButton> createState() => _NeonNewGameButtonState();
+}
+
+class _NeonNewGameButtonState extends State<_NeonNewGameButton> {
+  bool _pressed = false;
+  @override
+  Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(16);
+    return AnimatedScale(
+      duration: const Duration(milliseconds: 90),
+      scale: _pressed ? 0.98 : 1.0,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: radius,
+          splashColor: AppColors.neonPink.withOpacity(0.20),
+          onHighlightChanged: (h) => setState(() => _pressed = h),
+          onTap: widget.onTap,
+          child: Ink(
+            decoration: BoxDecoration(
+              borderRadius: radius,
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color(0xE6FF1493), // deep hot pink @ ~90% alpha
+                  AppColors.neonPink.withOpacity(0.78),
+                  Color(0x99FF7FCB), // lighter pink @ ~60% alpha
+                ],
+                stops: const [0.0, 0.55, 1.0],
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.neonPink.withOpacity(0.25),
+                  blurRadius: 16,
+                  spreadRadius: 1.2,
+                ),
+              ],
+            ),
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              child: Row(
+                children: [
+                  Icon(Icons.add_rounded, color: Colors.black),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'New Game',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.black,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Glow blob for corners
+class _CornerGlow extends StatelessWidget {
+  final Color color;
+  final double size;
+  const _CornerGlow({required this.color, required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: RadialGradient(
+            colors: [color, Colors.transparent],
+            stops: const [0.0, 1.0],
+          ),
+        ),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          child: const SizedBox.shrink(),
+        ),
+      ),
+    );
   }
 }

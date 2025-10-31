@@ -10,6 +10,7 @@ class GamePersistence {
   static String _key(Difficulty d) => 'saved_game_${_version}_${d.name}';
   static const _totalPointsKey = 'total_points_$_version';
   static const _lastPlayedKey = 'last_played_$_version';
+  static const _resumeKey = 'resume_game_$_version';
 
   // Live notifier for total points so UI can update in real time.
   static final ValueNotifier<int> totalPointsNotifier = ValueNotifier<int>(0);
@@ -45,14 +46,42 @@ class GamePersistence {
     int mistakes = 0,
   }) async {
     final sp = await SharedPreferences.getInstance();
+    // Preserve any existing 'lastLeft' timestamp so autosaves don't wipe it.
+    int? lastLeft;
+    try {
+      final existingRaw = sp.getString(_key(model.currentDifficulty));
+      if (existingRaw != null) {
+        final existing = jsonDecode(existingRaw) as Map<String, dynamic>;
+        lastLeft = (existing['lastLeft'] as num?)?.toInt();
+      }
+    } catch (_) {
+      // ignore corrupt existing data; we'll overwrite
+    }
+
     final data = <String, dynamic>{
       'elapsed': elapsedSeconds,
       'score': score,
       'mistakes': mistakes,
       'ts': DateTime.now().millisecondsSinceEpoch,
+      'lastLeft': lastLeft, // may be null; kept for accuracy
       'model': model.toMap(),
     };
     await sp.setString(_key(model.currentDifficulty), jsonEncode(data));
+  }
+
+  /// Mark a saved game as last-left/paused at the current (or provided) time.
+  /// This updates only the 'lastLeft' timestamp without affecting other fields.
+  static Future<void> updateLastLeft(Difficulty d, {int? timestampMs}) async {
+    final sp = await SharedPreferences.getInstance();
+    final raw = sp.getString(_key(d));
+    if (raw == null) return; // nothing to update
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      map['lastLeft'] = timestampMs ?? DateTime.now().millisecondsSinceEpoch;
+      await sp.setString(_key(d), jsonEncode(map));
+    } catch (_) {
+      // ignore
+    }
   }
 
   /// Load snapshot for a difficulty.
@@ -69,11 +98,13 @@ class GamePersistence {
       final elapsed = (map['elapsed'] as num?)?.toInt() ?? 0;
       final score = (map['score'] as num?)?.toInt() ?? 0;
       final mistakes = (map['mistakes'] as num?)?.toInt() ?? 0;
+      final lastLeft = (map['lastLeft'] as num?)?.toInt();
       return LoadedGame(
         model: model,
         elapsedSeconds: elapsed,
         score: score,
         mistakes: mistakes,
+        lastLeftMs: lastLeft,
       );
     } catch (_) {
       // Corrupt/old data — clear it so the app doesn't crash.
@@ -93,9 +124,12 @@ class GamePersistence {
       if (raw == null) continue;
       try {
         final m = jsonDecode(raw) as Map<String, dynamic>;
+        // Determine the most relevant timestamp: max(ts, lastLeft)
         final ts = (m['ts'] as num?)?.toInt() ?? 0;
-        if (ts > bestTs) {
-          bestTs = ts;
+        final lastLeft = (m['lastLeft'] as num?)?.toInt() ?? 0;
+        final candTs = ts > lastLeft ? ts : lastLeft;
+        if (candTs > bestTs) {
+          bestTs = candTs;
           bestDiff = d;
           bestElapsed = (m['elapsed'] as num?)?.toInt() ?? 0;
         }
@@ -111,6 +145,34 @@ class GamePersistence {
     );
   }
 
+  /// Compute and store the most recent "started" game across all difficulties.
+  ///
+  /// This prefers the explicitly tracked last-opened game (user actually
+  /// navigated into it). If that's not available, it falls back to the most
+  /// recently saved snapshot across difficulties. The chosen result is then
+  /// written into the last-opened metadata so other parts of the app can
+  /// resolve it quickly.
+  static Future<void> storeMostRecentStarted() async {
+    // Prefer the last-opened record (reflects actual user navigation).
+    final lastOpened = await getLastPlayed();
+    if (lastOpened != null) {
+      await setLastOpened(
+        lastOpened.difficulty,
+        elapsedSeconds: lastOpened.elapsedSeconds,
+      );
+      return;
+    }
+
+    // Fallback: derive from the most recent saved snapshot (max(ts, lastLeft)).
+    final lastSaved = await getLastSaved();
+    if (lastSaved != null) {
+      await setLastOpened(
+        lastSaved.difficulty,
+        elapsedSeconds: lastSaved.elapsedSeconds,
+      );
+    }
+  }
+
   /// Clear a saved game for a given difficulty.
   static Future<void> clear(Difficulty d) async {
     final sp = await SharedPreferences.getInstance();
@@ -123,6 +185,71 @@ class GamePersistence {
     for (final d in Difficulty.values) {
       await sp.remove(_key(d));
     }
+  }
+
+  // =====================
+  // Global resume (single slot)
+  // =====================
+  /// Persist a global resume snapshot, overwriting any previous one.
+  static Future<void> saveResume(
+    SudokuModel model, {
+    int elapsedSeconds = 0,
+    int score = 0,
+    int mistakes = 0,
+    DateTime? lastSavedAt,
+  }) async {
+    final sp = await SharedPreferences.getInstance();
+    final nowIso = (lastSavedAt ?? DateTime.now()).toIso8601String();
+    final data = <String, dynamic>{
+      'difficulty': model.currentDifficulty.name,
+      'elapsed': elapsedSeconds,
+      'score': score,
+      'mistakes': mistakes,
+      'lastSavedAt': nowIso,
+      'model': model.toMap(),
+    };
+    await sp.setString(_resumeKey, jsonEncode(data));
+  }
+
+  /// Load the global resume snapshot if present, else null.
+  static Future<LoadedResume?> loadResume() async {
+    final sp = await SharedPreferences.getInstance();
+    final raw = sp.getString(_resumeKey);
+    if (raw == null) return null;
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final diffName = map['difficulty'] as String?;
+      final difficulty = diffName != null
+          ? Difficulty.values.firstWhere(
+              (d) => d.name == diffName,
+              orElse: () => Difficulty.easy,
+            )
+          : Difficulty.easy;
+      final model = SudokuModel.fromMap(
+        Map<String, dynamic>.from(map['model'] as Map),
+      );
+      final elapsed = (map['elapsed'] as num?)?.toInt() ?? 0;
+      final score = (map['score'] as num?)?.toInt() ?? 0;
+      final mistakes = (map['mistakes'] as num?)?.toInt() ?? 0;
+      final lastSavedAt = map['lastSavedAt'] as String?;
+      return LoadedResume(
+        model: model,
+        elapsedSeconds: elapsed,
+        score: score,
+        mistakes: mistakes,
+        difficulty: difficulty,
+        lastSavedAtIso: lastSavedAt,
+      );
+    } catch (_) {
+      await clearResume();
+      return null;
+    }
+  }
+
+  /// Remove the global resume snapshot.
+  static Future<void> clearResume() async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.remove(_resumeKey);
   }
 
   // =====================
@@ -226,10 +353,29 @@ class LoadedGame {
   final int elapsedSeconds;
   final int score;
   final int mistakes;
+  final int? lastLeftMs;
   LoadedGame({
     required this.model,
     required this.elapsedSeconds,
     required this.score,
     required this.mistakes,
+    this.lastLeftMs,
+  });
+}
+
+class LoadedResume {
+  final SudokuModel model;
+  final int elapsedSeconds;
+  final int score;
+  final int mistakes;
+  final Difficulty difficulty;
+  final String? lastSavedAtIso;
+  LoadedResume({
+    required this.model,
+    required this.elapsedSeconds,
+    required this.score,
+    required this.mistakes,
+    required this.difficulty,
+    required this.lastSavedAtIso,
   });
 }

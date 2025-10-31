@@ -9,13 +9,24 @@ import '../services/game_persistence.dart';
 
 class GameScreen extends StatefulWidget {
   final Difficulty startDifficulty;
-  const GameScreen({super.key, this.startDifficulty = Difficulty.easy});
+  final SudokuModel? initialModel;
+  final int? initialElapsed;
+  final int? initialScore;
+  final int? initialMistakes;
+  const GameScreen({
+    super.key,
+    this.startDifficulty = Difficulty.easy,
+    this.initialModel,
+    this.initialElapsed,
+    this.initialScore,
+    this.initialMistakes,
+  });
 
   @override
   State<GameScreen> createState() => _GameScreenState();
 }
 
-class _GameScreenState extends State<GameScreen> {
+class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   late SudokuModel model;
   int? selectedRow;
   int? selectedCol;
@@ -46,13 +57,32 @@ class _GameScreenState extends State<GameScreen> {
   @override
   void initState() {
     super.initState();
-    model = SudokuModel()..loadRandom(widget.startDifficulty);
-    _startTimer(); // start ticking once model exists
-    // Record that this difficulty is now the last-opened game
-    GamePersistence.setLastOpened(widget.startDifficulty, elapsedSeconds: 0);
-
-    // Try loading a previously saved game for this difficulty
-    _tryLoadSaved();
+    WidgetsBinding.instance.addObserver(this);
+    if (widget.initialModel != null) {
+      model = widget.initialModel!;
+      elapsed = widget.initialElapsed ?? 0;
+      score = widget.initialScore ?? 0;
+      mistakes = widget.initialMistakes ?? 0;
+      _startTimer();
+      GamePersistence.setLastOpened(
+        model.currentDifficulty,
+        elapsedSeconds: elapsed,
+      );
+      // Persist an initial resume snapshot so Continue reflects this session
+      GamePersistence.saveResume(
+        model,
+        elapsedSeconds: elapsed,
+        score: score,
+        mistakes: mistakes,
+      );
+    } else {
+      model = SudokuModel()..loadRandom(widget.startDifficulty);
+      _startTimer(); // start ticking once model exists
+      // Record that this difficulty is now the last-opened game
+      GamePersistence.setLastOpened(widget.startDifficulty, elapsedSeconds: 0);
+      // Try loading a previously saved game for this difficulty
+      _tryLoadSaved();
+    }
 
     // Check for win after every setState
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkWin());
@@ -63,7 +93,17 @@ class _GameScreenState extends State<GameScreen> {
     _ticker?.cancel(); // stop the timer
     // Persist on exit so user can resume
     _persist();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Persist latest progress when app is backgrounded or becomes inactive.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      _persist();
+    }
   }
 
   Future<void> _tryLoadSaved() async {
@@ -90,6 +130,13 @@ class _GameScreenState extends State<GameScreen> {
 
   Future<void> _persist() async {
     await GamePersistence.save(
+      model,
+      elapsedSeconds: elapsed,
+      score: score,
+      mistakes: mistakes,
+    );
+    // Mirror to global resume so Home/Continue reflects most recent progress
+    await GamePersistence.saveResume(
       model,
       elapsedSeconds: elapsed,
       score: score,
@@ -298,10 +345,11 @@ class _GameScreenState extends State<GameScreen> {
                     child: const Text('New Game'),
                   ),
                   TextButton(
-                    onPressed: () {
+                    onPressed: () async {
                       if (mounted) setState(() => _modalOpen = false);
                       Navigator.pop(ctx); // close dialog
-                      Navigator.pop(context); // return to home
+                      await _persist();
+                      if (mounted) Navigator.pop(context); // return to home
                     },
                     child: const Text('Close'),
                   ),
@@ -379,6 +427,8 @@ class _GameScreenState extends State<GameScreen> {
       _pauseTimer(); // pause timer when won
       // Clear saved progress for this difficulty upon completion
       GamePersistence.clear(model.currentDifficulty);
+      // Clear the global resume so Home shows disabled Continue
+      GamePersistence.clearResume();
       if (mounted) setState(() => _modalOpen = true);
       showGeneralDialog(
         context: context,
@@ -481,484 +531,500 @@ class _GameScreenState extends State<GameScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return ScrollConfiguration(
-      behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
-      child: Scaffold(
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          automaticallyImplyLeading: false,
-          titleSpacing: 0,
-          toolbarHeight: 80, // Further reduced
-          title: Stack(
-            children: [
-              // Centered difficulty label at the very top
-              Align(
-                alignment: Alignment.topCenter,
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 10.0),
-                  child: Text(
-                    difficultyLabel(model.currentDifficulty),
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: AppColors.neonCyan,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 0.3,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-              ),
-              // Back arrow in top-left
-              Positioned(
-                left: 8,
-                top: 0,
-                child: IconButton(
-                  icon: const Icon(
-                    Icons.arrow_back_rounded,
-                    color: AppColors.neonCyan,
-                  ),
-                  onPressed: () => Navigator.pop(context),
-                ),
-              ),
-              // Game metrics below
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 40, 12, 2),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        // LEFT: SCORE
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppColors.card.withOpacity(0.12),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                              color: AppColors.neonLime.withOpacity(0.25),
-                            ),
-                          ),
-                          child: Text(
-                            'Score: $score',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.neonLime,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-
-                        // CENTER: MISTAKES
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppColors.card.withOpacity(0.12),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                              color: AppColors.neonPink.withOpacity(0.25),
-                            ),
-                          ),
-                          child: Text(
-                            'Mistakes: $mistakes/3',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.neonPink,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-
-                        // RIGHT: TIMER + BUTTONS
-                        Row(
-                          children: [
-                            Text(
-                              _mmss(elapsed),
-                              style: TextStyle(
-                                fontWeight: FontWeight.w700,
-                                color: _paused
-                                    ? AppColors.muted
-                                    : AppColors.text,
-                                fontSize: 14,
-                              ),
-                            ),
-                            IconButton(
-                              tooltip: _paused ? 'Resume' : 'Pause',
-                              icon: Icon(
-                                _paused
-                                    ? Icons.play_arrow_rounded
-                                    : Icons.pause_rounded,
-                                color: AppColors.neonCyan,
-                              ),
-                              onPressed: () =>
-                                  _paused ? _resumeTimer() : _pauseTimer(),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        body: SafeArea(
-          top: false, // Remove top SafeArea padding
-          child: Stack(
-            children: [
-              // Your existing game UI
-              Column(
-                children: [
-                  // Extra space between top widgets and the puzzle board
-                  const SizedBox(height: 12),
-                  // --- Board area (top-aligned, no extra expansion) ---
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 6.0),
-                    child: AspectRatio(
-                      aspectRatio: 1,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: AppColors.card,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppColors.neonPink.withOpacity(0.12),
-                              blurRadius: 18,
-                              spreadRadius: 2,
-                            ),
-                          ],
-                        ),
-                        padding: const EdgeInsets.all(4),
-                        child: _buildGrid(),
+    return WillPopScope(
+      onWillPop: () async {
+        await _persist();
+        return true;
+      },
+      child: ScrollConfiguration(
+        behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+        child: Scaffold(
+          appBar: AppBar(
+            backgroundColor: Colors.transparent,
+            automaticallyImplyLeading: false,
+            titleSpacing: 0,
+            toolbarHeight: 80, // Further reduced
+            title: Stack(
+              children: [
+                // Centered difficulty label at the very top
+                Align(
+                  alignment: Alignment.topCenter,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 10.0),
+                    child: Text(
+                      difficultyLabel(model.currentDifficulty),
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: AppColors.neonCyan,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.3,
+                        fontSize: 12,
                       ),
                     ),
                   ),
-                  const SizedBox(height: 40), // Space between board and actions
-                  // --- Actions ---
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 18.0),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        // Undo (entire column is clickable: icon + label)
-                        GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTapDown: (_) {
-                            if (_undoHistory.isEmpty) return;
-                            setState(() => _undoPressed = true);
-                          },
-                          onTapUp: (_) {
-                            if (_undoHistory.isEmpty) return;
-                            setState(() => _undoPressed = false);
-                          },
-                          onTapCancel: () {
-                            if (_undoHistory.isEmpty) return;
-                            setState(() => _undoPressed = false);
-                          },
-                          onTap: () {
-                            if (_undoHistory.isEmpty) return;
-                            _undo();
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 8,
-                            ),
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(12),
-                              boxShadow: _undoPressed
-                                  ? [
-                                      BoxShadow(
-                                        color: AppColors.neonCyan.withOpacity(
-                                          0.35,
-                                        ),
-                                        blurRadius: 14,
-                                        spreadRadius: 1,
-                                      ),
-                                    ]
-                                  : [],
-                            ),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                AnimatedScale(
-                                  scale: _undoPressed ? 0.92 : 1.0,
-                                  duration: const Duration(milliseconds: 90),
-                                  curve: Curves.easeOut,
-                                  child: Icon(
-                                    Icons.undo_rounded,
-                                    size: 32,
-                                    color: _undoHistory.isEmpty
-                                        ? AppColors.muted.withOpacity(0.3)
-                                        : AppColors.muted,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Undo',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: _undoHistory.isEmpty
-                                        ? AppColors.muted.withOpacity(0.3)
-                                        : AppColors.muted,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 40),
-                        // Erase (entire column is clickable: icon + label)
-                        GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTapDown: (_) =>
-                              setState(() => _erasePressed = true),
-                          onTapUp: (_) => setState(() => _erasePressed = false),
-                          onTapCancel: () =>
-                              setState(() => _erasePressed = false),
-                          onTap: () {
-                            _erase();
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 8,
-                            ),
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(12),
-                              boxShadow: _erasePressed
-                                  ? [
-                                      BoxShadow(
-                                        color: AppColors.neonPink.withOpacity(
-                                          0.35,
-                                        ),
-                                        blurRadius: 14,
-                                        spreadRadius: 1,
-                                      ),
-                                    ]
-                                  : [],
-                            ),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                AnimatedScale(
-                                  scale: _erasePressed ? 0.92 : 1.0,
-                                  duration: const Duration(milliseconds: 90),
-                                  curve: Curves.easeOut,
-                                  child: const Icon(
-                                    Icons.auto_fix_high_rounded,
-                                    size: 32,
-                                    color: AppColors.muted,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                const Text(
-                                  'Erase',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: AppColors.muted,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 40),
-                        // Notes (entire column is clickable: icon + label)
-                        GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTapDown: (_) =>
-                              setState(() => _notesPressed = true),
-                          onTapUp: (_) => setState(() => _notesPressed = false),
-                          onTapCancel: () =>
-                              setState(() => _notesPressed = false),
-                          onTap: () {
-                            setState(() {
-                              notesMode = !notesMode;
-                            });
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 8,
-                            ),
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(12),
-                              boxShadow: _notesPressed
-                                  ? [
-                                      BoxShadow(
-                                        color: AppColors.neonCyan.withOpacity(
-                                          0.35,
-                                        ),
-                                        blurRadius: 14,
-                                        spreadRadius: 1,
-                                      ),
-                                    ]
-                                  : [],
-                            ),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                AnimatedScale(
-                                  scale: _notesPressed ? 0.92 : 1.0,
-                                  duration: const Duration(milliseconds: 90),
-                                  curve: Curves.easeOut,
-                                  child: Icon(
-                                    notesMode
-                                        ? Icons.edit
-                                        : Icons.mode_edit_outline_outlined,
-                                    size: 32,
-                                    color: notesMode
-                                        ? AppColors.neonCyan
-                                        : AppColors.muted,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Notes',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: notesMode
-                                        ? AppColors.neonCyan
-                                        : AppColors.muted,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
+                ),
+                // Back arrow in top-left
+                Positioned(
+                  left: 8,
+                  top: 0,
+                  child: IconButton(
+                    icon: const Icon(
+                      Icons.arrow_back_rounded,
+                      color: AppColors.neonCyan,
                     ),
+                    onPressed: () async {
+                      await _persist();
+                      if (mounted) Navigator.pop(context);
+                    },
                   ),
-                  const SizedBox(
-                    height: 40,
-                  ), // 40px space between actions and keypad
-                  // --- Number pad: force-fit single horizontal row ---
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12.0),
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final available = constraints.maxWidth;
-
-                        // Always render all 1..9 keys; completed ones will be disabled/grayed.
-                        final allNums = List<int>.generate(9, (i) => i + 1);
-                        final completed = _completedNumbers();
-                        final keys = allNums.length;
-
-                        // Try progressively smaller spacings so keys can fit without scrolling.
-                        // Make spacing tighter so keys are visually closer together.
-                        final spacingOptions = [4.0, 2.0, 1.0, 0.0];
-                        // Slightly increase min width so keys are more visible, but still fit
-                        const minKeySize = 30.0;
-                        const maxKeySize = 64.0;
-
-                        double chosenSpacing = spacingOptions.first;
-                        double computedSize = minKeySize;
-                        bool fitted = false;
-
-                        for (final s in spacingOptions) {
-                          final totalSpacing = s * (keys - 1);
-                          final candidate = (available - totalSpacing) / keys;
-                          if (candidate >= minKeySize) {
-                            chosenSpacing = s;
-                            computedSize = candidate.clamp(
-                              minKeySize,
-                              maxKeySize,
-                            );
-                            fitted = true;
-                            break;
-                          }
-                        }
-
-                        // As a fallback, if none of the spacings produced a candidate >= minKeySize,
-                        // compute a key size that fits even on very narrow screens.
-                        if (!fitted) {
-                          chosenSpacing =
-                              spacingOptions.last; // tightest spacing
-                          final totalSpacing = chosenSpacing * (keys - 1);
-                          final candidate = (available - totalSpacing) / keys;
-                          // allow going smaller than min to avoid overflow on extreme cases
-                          computedSize = candidate.clamp(12.0, maxKeySize);
-                        }
-
-                        final keySize = computedSize;
-
-                        return Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            for (int i = 0; i < allNums.length; i++) ...[
-                              NumKey(
-                                size: keySize,
-                                label: '${allNums[i]}',
-                                enabled: !completed.contains(allNums[i]),
-                                onTap: () => _onInput(allNums[i]),
+                ),
+                // Game metrics below
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 40, 12, 2),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          // LEFT: SCORE
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.card.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: AppColors.neonLime.withOpacity(0.25),
                               ),
-                              if (i != allNums.length - 1)
-                                SizedBox(width: chosenSpacing),
+                            ),
+                            child: Text(
+                              'Score: $score',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.neonLime,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+
+                          // CENTER: MISTAKES
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.card.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: AppColors.neonPink.withOpacity(0.25),
+                              ),
+                            ),
+                            child: Text(
+                              'Mistakes: $mistakes/3',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.neonPink,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+
+                          // RIGHT: TIMER + BUTTONS
+                          Row(
+                            children: [
+                              Text(
+                                _mmss(elapsed),
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: _paused
+                                      ? AppColors.muted
+                                      : AppColors.text,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: _paused ? 'Resume' : 'Pause',
+                                icon: Icon(
+                                  _paused
+                                      ? Icons.play_arrow_rounded
+                                      : Icons.pause_rounded,
+                                  color: AppColors.neonCyan,
+                                ),
+                                onPressed: () =>
+                                    _paused ? _resumeTimer() : _pauseTimer(),
+                              ),
                             ],
-                          ],
-                        );
-                      },
-                    ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
-                  const SizedBox(
-                    height: 2,
-                  ), // Reduced from 12 for compact layout
-                  const SizedBox(
-                    height: 2,
-                  ), // Reduced from 16 for compact layout
-                ],
-              ),
-
-              // --- Full-screen pause overlay ---
-              if (_paused && !_modalOpen)
-                Positioned.fill(child: _buildPauseOverlay()),
-            ],
+                ),
+              ],
+            ),
           ),
-        ),
-
-        // Check for win after state updates
-        bottomNavigationBar: model.isComplete
-            ? Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
-                ),
-                decoration: BoxDecoration(
-                  color: AppColors.card,
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.neonLime.withOpacity(0.25),
-                      blurRadius: 24,
-                      spreadRadius: 2,
+          body: SafeArea(
+            top: false, // Remove top SafeArea padding
+            child: Stack(
+              children: [
+                // Your existing game UI
+                Column(
+                  children: [
+                    // Extra space between top widgets and the puzzle board
+                    const SizedBox(height: 12),
+                    // --- Board area (top-aligned, no extra expansion) ---
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6.0),
+                      child: AspectRatio(
+                        aspectRatio: 1,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: AppColors.card,
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppColors.neonPink.withOpacity(0.12),
+                                blurRadius: 18,
+                                spreadRadius: 2,
+                              ),
+                            ],
+                          ),
+                          padding: const EdgeInsets.all(4),
+                          child: _buildGrid(),
+                        ),
+                      ),
                     ),
+                    const SizedBox(
+                      height: 40,
+                    ), // Space between board and actions
+                    // --- Actions ---
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 18.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          // Undo (entire column is clickable: icon + label)
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTapDown: (_) {
+                              if (_undoHistory.isEmpty) return;
+                              setState(() => _undoPressed = true);
+                            },
+                            onTapUp: (_) {
+                              if (_undoHistory.isEmpty) return;
+                              setState(() => _undoPressed = false);
+                            },
+                            onTapCancel: () {
+                              if (_undoHistory.isEmpty) return;
+                              setState(() => _undoPressed = false);
+                            },
+                            onTap: () {
+                              if (_undoHistory.isEmpty) return;
+                              _undo();
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(12),
+                                boxShadow: _undoPressed
+                                    ? [
+                                        BoxShadow(
+                                          color: AppColors.neonCyan.withOpacity(
+                                            0.35,
+                                          ),
+                                          blurRadius: 14,
+                                          spreadRadius: 1,
+                                        ),
+                                      ]
+                                    : [],
+                              ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  AnimatedScale(
+                                    scale: _undoPressed ? 0.92 : 1.0,
+                                    duration: const Duration(milliseconds: 90),
+                                    curve: Curves.easeOut,
+                                    child: Icon(
+                                      Icons.undo_rounded,
+                                      size: 32,
+                                      color: _undoHistory.isEmpty
+                                          ? AppColors.muted.withOpacity(0.3)
+                                          : AppColors.muted,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Undo',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: _undoHistory.isEmpty
+                                          ? AppColors.muted.withOpacity(0.3)
+                                          : AppColors.muted,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 40),
+                          // Erase (entire column is clickable: icon + label)
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTapDown: (_) =>
+                                setState(() => _erasePressed = true),
+                            onTapUp: (_) =>
+                                setState(() => _erasePressed = false),
+                            onTapCancel: () =>
+                                setState(() => _erasePressed = false),
+                            onTap: () {
+                              _erase();
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(12),
+                                boxShadow: _erasePressed
+                                    ? [
+                                        BoxShadow(
+                                          color: AppColors.neonPink.withOpacity(
+                                            0.35,
+                                          ),
+                                          blurRadius: 14,
+                                          spreadRadius: 1,
+                                        ),
+                                      ]
+                                    : [],
+                              ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  AnimatedScale(
+                                    scale: _erasePressed ? 0.92 : 1.0,
+                                    duration: const Duration(milliseconds: 90),
+                                    curve: Curves.easeOut,
+                                    child: const Icon(
+                                      Icons.auto_fix_high_rounded,
+                                      size: 32,
+                                      color: AppColors.muted,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  const Text(
+                                    'Erase',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: AppColors.muted,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 40),
+                          // Notes (entire column is clickable: icon + label)
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTapDown: (_) =>
+                                setState(() => _notesPressed = true),
+                            onTapUp: (_) =>
+                                setState(() => _notesPressed = false),
+                            onTapCancel: () =>
+                                setState(() => _notesPressed = false),
+                            onTap: () {
+                              setState(() {
+                                notesMode = !notesMode;
+                              });
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(12),
+                                boxShadow: _notesPressed
+                                    ? [
+                                        BoxShadow(
+                                          color: AppColors.neonCyan.withOpacity(
+                                            0.35,
+                                          ),
+                                          blurRadius: 14,
+                                          spreadRadius: 1,
+                                        ),
+                                      ]
+                                    : [],
+                              ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  AnimatedScale(
+                                    scale: _notesPressed ? 0.92 : 1.0,
+                                    duration: const Duration(milliseconds: 90),
+                                    curve: Curves.easeOut,
+                                    child: Icon(
+                                      notesMode
+                                          ? Icons.edit
+                                          : Icons.mode_edit_outline_outlined,
+                                      size: 32,
+                                      color: notesMode
+                                          ? AppColors.neonCyan
+                                          : AppColors.muted,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Notes',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: notesMode
+                                          ? AppColors.neonCyan
+                                          : AppColors.muted,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(
+                      height: 40,
+                    ), // 40px space between actions and keypad
+                    // --- Number pad: force-fit single horizontal row ---
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12.0),
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final available = constraints.maxWidth;
+
+                          // Determine which numbers are still available (not fully placed yet).
+                          final allNums = List<int>.generate(9, (i) => i + 1);
+                          final completed = _completedNumbers();
+                          final nums = [
+                            for (final n in allNums)
+                              if (!completed.contains(n)) n,
+                          ];
+                          final keys = nums.length;
+
+                          // Try progressively smaller spacings so keys can fit without scrolling.
+                          // Make spacing tighter so keys are visually closer together.
+                          final spacingOptions = [4.0, 2.0, 1.0, 0.0];
+                          // Slightly increase min width so keys are more visible, but still fit
+                          const minKeySize = 30.0;
+                          const maxKeySize = 64.0;
+
+                          double chosenSpacing = spacingOptions.first;
+                          double computedSize = minKeySize;
+                          bool fitted = false;
+
+                          for (final s in spacingOptions) {
+                            final totalSpacing = s * (keys - 1);
+                            final candidate = (available - totalSpacing) / keys;
+                            if (candidate >= minKeySize) {
+                              chosenSpacing = s;
+                              computedSize = candidate.clamp(
+                                minKeySize,
+                                maxKeySize,
+                              );
+                              fitted = true;
+                              break;
+                            }
+                          }
+
+                          // As a fallback, if none of the spacings produced a candidate >= minKeySize,
+                          // compute a key size that fits even on very narrow screens.
+                          if (!fitted) {
+                            chosenSpacing =
+                                spacingOptions.last; // tightest spacing
+                            final totalSpacing = chosenSpacing * (keys - 1);
+                            final candidate = (available - totalSpacing) / keys;
+                            // allow going smaller than min to avoid overflow on extreme cases
+                            computedSize = candidate.clamp(12.0, maxKeySize);
+                          }
+
+                          final keySize = computedSize;
+
+                          return Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              for (int i = 0; i < nums.length; i++) ...[
+                                NumKey(
+                                  size: keySize,
+                                  label: '${nums[i]}',
+                                  onTap: () => _onInput(nums[i]),
+                                ),
+                                if (i != nums.length - 1)
+                                  SizedBox(width: chosenSpacing),
+                              ],
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(
+                      height: 2,
+                    ), // Reduced from 12 for compact layout
+                    const SizedBox(
+                      height: 2,
+                    ), // Reduced from 16 for compact layout
                   ],
-                  border: const Border(
-                    top: BorderSide(color: AppColors.neonLime, width: 2),
-                  ),
                 ),
-                child: const Text(
-                  '🎉 Completed! You’re glowing.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: AppColors.neonLime,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 16,
-                    letterSpacing: 0.4,
+
+                // --- Full-screen pause overlay ---
+                if (_paused && !_modalOpen)
+                  Positioned.fill(child: _buildPauseOverlay()),
+              ],
+            ),
+          ),
+
+          // Check for win after state updates
+          bottomNavigationBar: model.isComplete
+              ? Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
                   ),
-                ),
-              )
-            : null,
+                  decoration: BoxDecoration(
+                    color: AppColors.card,
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.neonLime.withOpacity(0.25),
+                        blurRadius: 24,
+                        spreadRadius: 2,
+                      ),
+                    ],
+                    border: const Border(
+                      top: BorderSide(color: AppColors.neonLime, width: 2),
+                    ),
+                  ),
+                  child: const Text(
+                    '🎉 Completed! You’re glowing.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: AppColors.neonLime,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 16,
+                      letterSpacing: 0.4,
+                    ),
+                  ),
+                )
+              : null,
+        ),
       ),
     );
   }
